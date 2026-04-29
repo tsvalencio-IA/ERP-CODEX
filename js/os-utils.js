@@ -161,6 +161,41 @@
     return /^\d+(?:[,.]\d+)?$/.test(String(t || ''));
   }
 
+  function isCiliaSummaryOrServiceBoundary(line) {
+    const n = U.normalizeText(line);
+    return n.includes('total pecas') ||
+      n.includes('total geral') ||
+      n.includes('subtotal') ||
+      n.includes('mao de obra do orcamento') ||
+      n.includes('total mao de obra') ||
+      n.startsWith('servicos') ||
+      n.includes(' servicos ');
+  }
+
+  function ciliaPieceLinesOnly(lines) {
+    let inParts = false;
+    let sawHeader = false;
+    const selected = [];
+    (lines || []).forEach(line => {
+      const n = U.normalizeText(line);
+      const isPartsHeader =
+        n.includes('pecas e mao de obra') ||
+        (n.includes('operacoes') && n.includes('descricao/codigo')) ||
+        (n.includes('qtd') && n.includes('descricao/codigo') && n.includes('preco'));
+      if (isPartsHeader) {
+        inParts = true;
+        sawHeader = true;
+        return;
+      }
+      if (inParts && isCiliaSummaryOrServiceBoundary(line)) {
+        inParts = false;
+        return;
+      }
+      if (inParts) selected.push(line);
+    });
+    return sawHeader ? selected : (lines || []).filter(line => !isCiliaSummaryOrServiceBoundary(line));
+  }
+
   function peelCiliaDescriptionAndQty(text) {
     let tokens = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
     while (tokens.length && /^(T|R|P|R&I|RI)$/i.test(tokens[0])) tokens.shift();
@@ -201,28 +236,36 @@
       .trim();
 
     const peeled = peelCiliaDescriptionAndQty(desc);
-    return {
+    const normalized = {
       ...p,
-      codigo,
+      codigo: codigo || 'sem oem',
       desc: peeled.desc,
       qtd: U.parseNumberBR(p.qtd || p.quantidade || 0) || peeled.qtd || 1,
       venda: U.parseNumberBR(p.venda || p.valor || p.precoBruto || 0) || prices.bruto || U.parseNumberBR(p.ciliaValorLiquido || 0) || prices.liquido || 0,
       ciliaValorLiquido: U.parseNumberBR(p.ciliaValorLiquido || p.valorLiquido || 0) || prices.liquido || 0,
       ciliaDesconto: U.parseNumberBR(p.ciliaDesconto || p.desconto || 0) || prices.desconto || 0
     };
+    return normalized;
   };
 
   U.normalizeCiliaPieces = function(pieces) {
     return (pieces || [])
       .map(U.normalizeCiliaPiece)
-      .filter(p => p.codigo || p.desc || U.parseNumberBR(p.venda) > 0);
+      .filter(p => {
+        const n = U.normalizeText(p.desc);
+        if (!p.desc && p.codigo === 'sem oem') return false;
+        if (isCiliaSummaryOrServiceBoundary(p.desc)) return false;
+        if (n === 'total' || n === 'preco' || n === 'desconto') return false;
+        return p.codigo || p.desc || U.parseNumberBR(p.venda) > 0;
+      });
   };
 
   U.parseCiliaPiecesFromLines = function(lines) {
     const out = [];
-    (lines || []).forEach(line => {
+    ciliaPieceLinesOnly(lines).forEach(line => {
       const original = String(line || '').replace(/\s+/g, ' ').trim();
       if (!original || !/R\$/i.test(original)) return;
+      if (isCiliaSummaryOrServiceBoundary(original)) return;
       const prices = extractCiliaPrices(original);
       if (!prices.bruto && !prices.liquido) return;
 
@@ -236,7 +279,7 @@
         codigo = codMarker[2].trim();
       } else {
         const first = beforePrice.match(/^([A-Z0-9][A-Z0-9./-]{3,})\s+(.+)$/);
-        if (first && /\d/.test(first[1]) && !/^(TOTAL|PRECO|VALOR)$/i.test(first[1])) {
+        if (first && /\d/.test(first[1]) && !/^\d+[,.]\d+$/.test(first[1]) && !/^(TOTAL|PRECO|VALOR)$/i.test(first[1])) {
           codigo = first[1].trim();
           descPart = first[2].trim();
         }

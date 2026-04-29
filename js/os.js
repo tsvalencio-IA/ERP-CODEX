@@ -11,6 +11,18 @@ const OSU = () => window.JarvisOSUtils || window.JOS || {};
 const numBR = value => (OSU().parseNumberBR ? OSU().parseNumberBR(value) : (parseFloat(String(value || 0).replace(',', '.')) || 0));
 const escOS = value => (OSU().escapeHtml ? OSU().escapeHtml(value) : String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])));
 
+async function auditGeralOS(osId, acao, extra = {}) {
+  try {
+    const idCurto = osId ? String(osId).slice(-6).toUpperCase() : 'NOVA';
+    const texto = `OS #${idCurto} — ${acao}`;
+    if (typeof window.audit === 'function') {
+      await window.audit('OS', texto, { osId: osId || null, origem: 'jarvis_campos_editaveis', ...extra });
+    } else if (typeof audit === 'function') {
+      await audit('OS', texto);
+    }
+  } catch(e) {}
+}
+
 const KANBAN_STATUSES = ['Triagem', 'Orcamento', 'Orcamento_Enviado', 'Aprovado', 'Andamento', 'Pronto', 'Entregue'];
 
 const STATUS_MAP_LEGACY = { 
@@ -759,7 +771,10 @@ window.salvarOS = async function() {
           desc: descLivre,
           qtd: qtd,
           custo: 0,
-          venda: venda
+          venda: venda,
+          ciliaBruto: numBR(row.dataset?.ciliaBruto || venda),
+          ciliaValorLiquido: numBR(row.dataset?.ciliaLiquido || 0),
+          ciliaDesconto: numBR(row.dataset?.ciliaDesconto || 0)
         });
       }
       return;
@@ -879,11 +894,29 @@ window.salvarOS = async function() {
   const funcUser = J.nome || 'Mecânico/Gestor';
   let tl = [];
   let dispararAvisoEntrega = false;
+  const auditoriaGeralOS = [];
 
   if (osId) {
       const oldOS = J.os.find(x => x.id === osId) || {};
       tl = oldOS.timeline ? [...oldOS.timeline] : JSON.parse($('osTimelineData')?.value || '[]');
       let registouAlgo = false;
+      let alterouCampoAuditavel = false;
+      const addAuditoriaCampo = acao => {
+          auditoriaGeralOS.push(acao);
+          alterouCampoAuditavel = true;
+      };
+      const fmtAudit = v => {
+          if (v == null || v === '') return 'vazio';
+          if (typeof v === 'number') return String(v).replace('.', ',');
+          return String(v);
+      };
+      const normAudit = v => JSON.stringify(v == null ? '' : v);
+      const auditCampoSeMudou = (key, label) => {
+          if (!Object.prototype.hasOwnProperty.call(payload, key)) return;
+          if (normAudit(oldOS[key]) !== normAudit(payload[key])) {
+              addAuditoriaCampo(`${label}: "${fmtAudit(oldOS[key])}" -> "${fmtAudit(payload[key])}"`);
+          }
+      };
 
       // 1. Mudança de Status e Gatilhos de Notificação
       if (oldOS.status !== payload.status) {
@@ -926,8 +959,7 @@ window.salvarOS = async function() {
           if (oldVal !== newVal) {
               const labelDe = mapEstadoLabel[oldVal] || 'neutro';
               const labelPara = mapEstadoLabel[newVal] || 'neutro';
-              tl.push({ dt: new Date().toISOString(), user: funcUser, acao: `Checklist "${mapCheck[chk]}": ${labelDe} → ${labelPara}` });
-              registouAlgo = true;
+              addAuditoriaCampo(`Checklist "${mapCheck[chk]}": ${labelDe} -> ${labelPara}`);
           }
       });
 
@@ -935,23 +967,40 @@ window.salvarOS = async function() {
       if (oldOS.mecId !== payload.mecId && payload.mecId) {
           const mecOld = (J.equipe || []).find(m => m.id === oldOS.mecId);
           const mecNovo = (J.equipe || []).find(m => m.id === payload.mecId);
-          tl.push({ dt: new Date().toISOString(), user: funcUser, acao: `Mecânico responsável: ${mecOld?.nome || '—'} → ${mecNovo?.nome || '—'}` });
-          registouAlgo = true;
+          addAuditoriaCampo(`Mecanico responsavel: ${mecOld?.nome || '-'} -> ${mecNovo?.nome || '-'}`);
       }
 
       // 3c. Mudança de KM
       if (oldOS.km && payload.km && String(oldOS.km).trim() !== String(payload.km).trim()) {
-          tl.push({ dt: new Date().toISOString(), user: funcUser, acao: `KM do veículo: ${oldOS.km} → ${payload.km}` });
-          registouAlgo = true;
+          addAuditoriaCampo(`KM do veiculo: ${oldOS.km} -> ${payload.km}`);
       }
 
       // 3d. Mudança de cliente vinculado
       if (oldOS.clienteId && payload.clienteId && oldOS.clienteId !== payload.clienteId) {
           const cOld = (J.clientes || []).find(c => c.id === oldOS.clienteId);
           const cNovo = (J.clientes || []).find(c => c.id === payload.clienteId);
-          tl.push({ dt: new Date().toISOString(), user: funcUser, acao: `Cliente vinculado: "${cOld?.nome || '—'}" → "${cNovo?.nome || '—'}"` });
-          registouAlgo = true;
+          addAuditoriaCampo(`Cliente vinculado: "${cOld?.nome || '-'}" -> "${cNovo?.nome || '-'}"`);
       }
+
+      [
+          ['placa', 'Placa'],
+          ['veiculo', 'Veiculo'],
+          ['veiculoId', 'Veiculo vinculado'],
+          ['celular', 'Celular'],
+          ['cpf', 'CPF/Documento'],
+          ['relato', 'Relato/queixa'],
+          ['desc', 'Descricao geral'],
+          ['data', 'Data da OS'],
+          ['entreguePara', 'Entregue para'],
+          ['descMO', 'Desconto mao de obra'],
+          ['descPeca', 'Desconto pecas'],
+          ['proxRev', 'Proxima revisao - data'],
+          ['proxKm', 'Proxima revisao - KM'],
+          ['chkObs', 'Observacoes do checklist'],
+          ['chkPneuDia', 'Pneu dianteiro'],
+          ['chkPneuTra', 'Pneu traseiro'],
+          ['chkComb', 'Nivel combustivel']
+      ].forEach(([key, label]) => auditCampoSeMudou(key, label));
 
       // 4. Identificação de Peças (Adições, Remoções, Alterações de Qtd/Valor)
       const oldPecas = oldOS.pecas || [];
@@ -966,8 +1015,7 @@ window.salvarOS = async function() {
               registouAlgo = true;
           } else {
               if (numBR(oldP.qtd || 0) !== numBR(newP.qtd || 0) || numBR(oldP.venda || 0) !== numBR(newP.venda || 0)) {
-                  tl.push({ dt: new Date().toISOString(), user: funcUser, acao: `Alterou peça ${newP.desc} para Qtd: ${newP.qtd} / Valor: R$ ${(newP.venda||0).toFixed(2).replace('.', ',')}` });
-                  registouAlgo = true;
+                  addAuditoriaCampo(`Alterou peca "${newP.desc}" para Qtd: ${newP.qtd} / Valor: R$ ${(newP.venda||0).toFixed(2).replace('.', ',')}`);
               }
           }
       });
@@ -994,8 +1042,10 @@ window.salvarOS = async function() {
               registouAlgo = true;
           } else {
               if (numBR(oldS.valor || 0) !== numBR(newS.valor || 0)) {
-                  tl.push({ dt: new Date().toISOString(), user: funcUser, acao: `Alterou valor do serviço ${newS.desc} para R$ ${(newS.valor||0).toFixed(2).replace('.', ',')}` });
-                  registouAlgo = true;
+                  addAuditoriaCampo(`Alterou valor do servico "${newS.desc}" para R$ ${(newS.valor||0).toFixed(2).replace('.', ',')}`);
+              }
+              if (numBR(oldS.tempo || 0) !== numBR(newS.tempo || 0)) {
+                  addAuditoriaCampo(`Alterou horas/TMO do servico "${newS.desc}" de ${String(oldS.tempo || 0).replace('.', ',')}h para ${String(newS.tempo || 0).replace('.', ',')}h`);
               }
           }
       });
@@ -1022,8 +1072,9 @@ window.salvarOS = async function() {
           registouAlgo = true;
       }
 
-      // Fallback genérico caso tenha havido uma edição noutros campos (como KM)
-      if (!registouAlgo) {
+      // Fallback operacional: se nada entrou no histórico da OS e também não foi
+      // alteração de campo auditável, mantém um registro mínimo de edição.
+      if (!registouAlgo && !alterouCampoAuditavel) {
           tl.push({ dt: new Date().toISOString(), user: funcUser, acao: `Atualizou os detalhes gerais da Ordem de Serviço.` });
       }
       
@@ -1225,6 +1276,12 @@ if (osId) {
     savedOsId = ref.id;
     window.toast('✓ O.S. CRIADA');
     audit('OS', `Criou OS para ${payload.placa || payload.cliente || J.clientes.find(c => c.id === payload.clienteId)?.nome}`);
+  }
+
+  if (auditoriaGeralOS.length) {
+    for (const acao of auditoriaGeralOS) {
+      await auditGeralOS(savedOsId, acao);
+    }
   }
 
   if (_pecasReais.length > 0 || (oldOSParaAprovacao.pecasReais || []).length > 0) {
@@ -1648,6 +1705,7 @@ window.importarCilia = async function(input) {
 };
 
 function _ciliaAdicionarPecas(pecas) {
+  pecas = OSU().normalizeCiliaPieces ? OSU().normalizeCiliaPieces(pecas) : pecas;
   if (!pecas || !pecas.length) {
     if (typeof window.toast === 'function') window.toast('Nenhuma peça encontrada no arquivo Cília.', 'warn');
     return;
@@ -1671,11 +1729,14 @@ function _ciliaAdicionarPecas(pecas) {
     div.style.cssText = `display:grid;grid-template-columns:${colsGov};gap:8px;align-items:center;background:rgba(0,212,255,0.06);padding:8px;border-radius:3px;border:1px solid rgba(0,212,255,0.25);`;
     div.dataset.pecaAvulsa = '1';
     div.dataset.cilia = '1';
+    div.dataset.ciliaBruto = String(vBruto);
+    div.dataset.ciliaLiquido = String(numBR(p.ciliaValorLiquido || 0));
+    div.dataset.ciliaDesconto = String(numBR(p.ciliaDesconto || 0));
     div.innerHTML = `
       <input type="text" class="j-input peca-codigo" value="${_escVal(p.codigo)}" placeholder="Código OEM" style="font-family:var(--fm);font-size:0.78rem;" title="Código OEM (editável)">
       <input type="text" class="j-input peca-desc-livre" value="${_escVal(p.desc)}" placeholder="Descrição da peça" oninput="window.calcOSTotal()">
       <input type="number" class="j-input peca-qtd" value="${qtd}" min="1" oninput="window.calcOSTotal()" title="Quantidade importada do Cília">
-      <input type="text" inputmode="decimal" class="j-input peca-venda" value="${vBruto.toFixed(2).replace('.', ',')}" placeholder="Valor unit." oninput="window.calcOSTotal()" title="Valor unitário bruto importado do Cília (editável)">
+      <input type="text" inputmode="decimal" class="j-input peca-venda" value="${vBruto.toFixed(2).replace('.', ',')}" placeholder="Valor unit." oninput="this.dataset.editadoManual='1';window.calcOSTotal()" title="Valor unitário bruto importado do Cília (editável)">
       ${badgePeca}
       <button type="button" onclick="this.parentElement.remove();window.calcOSTotal()" style="background:rgba(255,59,59,0.1);border:1px solid rgba(255,59,59,0.3);border-radius:2px;color:var(--danger);cursor:pointer;width:32px;height:32px;">✕</button>
     `;
@@ -1788,7 +1849,10 @@ async function _ciliaProcessarPDF(file) {
       .map(y => linhasMap[y].sort((a, b) => a.x - b.x).map(s => s.text).join(' '));
 
     const tokensOrdenados = linhas.join(' ').split(/\s+/).filter(Boolean);
-    const pecas = OSU().parseCiliaPiecesFromTokens ? OSU().parseCiliaPiecesFromTokens(tokensOrdenados) : [];
+    let pecas = OSU().parseCiliaPiecesFromLines ? OSU().parseCiliaPiecesFromLines(linhas) : [];
+    if (!pecas.length) {
+      pecas = OSU().parseCiliaPiecesFromTokens ? OSU().parseCiliaPiecesFromTokens(tokensOrdenados) : [];
+    }
     const brl = s => numBR(s);
 
     for (const linha of (pecas.length ? [] : linhas)) {
@@ -1796,7 +1860,7 @@ async function _ciliaProcessarPDF(file) {
       // "T R&I 0,00 1.00 BOMBA DE COMBUSTÍVEL Cód: 172029382R Oficina R$ 1.795,30 % 48,00 R$ 933,56"
       // Captura: operação | TMO | qtd | DESCRIÇÃO Cód: CODIGO Fornec | preçoBruto | %desc | preçoLíquido
       const mPrincipal = linha.match(
-        /(?:[TR](?:\s+R&I)?)\s+[\d,]+\s+([\d,]+)\s+(.+?)\s+C.?d[:\.]?\s*([A-Z0-9\-\.\/]+)\s+\w+\s+R\$\s*([\d\.,]+)\s+%\s*[\d,]+\s+R\$\s*([\d\.,]+)/i
+        /(?:[TR](?:\s+R&I)?)\s+[\d,]+\s+([\d,]+)\s+(.+?)\s+C.?d[:\.]\s*([A-Z0-9\-\.\/]+)\s+\w+\s+R\$\s*([\d\.,]+)\s+%\s*[\d,]+\s+R\$\s*([\d\.,]+)/i
       );
       if (mPrincipal) {
         pecas.push({
@@ -1810,7 +1874,7 @@ async function _ciliaProcessarPDF(file) {
       }
 
       // ── PADRÃO SEM OPERAÇÃO: "DESCRICAO Cód: CODIGO Qtd R$ PRECO_LIQ" ──────
-      const mSemOp = linha.match(/(.+?)\s+C.?d[:\.]?\s*([A-Z0-9\-\.\/]+)\s+[\w\/]+\s+R\$\s*([\d\.,]+)\s+%\s*[\d,]+\s+R\$\s*([\d\.,]+)/i);
+      const mSemOp = linha.match(/(.+?)\s+C.?d[:\.]\s*([A-Z0-9\-\.\/]+)\s+[\w\/]+\s+R\$\s*([\d\.,]+)\s+%\s*[\d,]+\s+R\$\s*([\d\.,]+)/i);
       if (mSemOp) {
         pecas.push({
           codigo: mSemOp[2].trim(),

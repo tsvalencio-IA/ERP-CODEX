@@ -146,6 +146,117 @@
     return /^-?\d{1,3}(?:\.\d{3})*,\d{2}$/.test(String(t || '')) || /^-?\d+,\d{2}$/.test(String(t || ''));
   }
 
+  function extractCiliaPrices(text) {
+    const s = String(text || '');
+    const money = Array.from(s.matchAll(/R\$\s*([\d.]+,\d{2}|\d+,\d{2}|\d+\.\d{2})/gi)).map(m => m[1]);
+    const desconto = s.match(/%\s*([\d.,]+)/);
+    return {
+      bruto: U.parseNumberBR(money[0] || 0),
+      liquido: U.parseNumberBR(money.length > 1 ? money[money.length - 1] : 0),
+      desconto: U.parseNumberBR(desconto?.[1] || 0)
+    };
+  }
+
+  function isNumericToken(t) {
+    return /^\d+(?:[,.]\d+)?$/.test(String(t || ''));
+  }
+
+  function peelCiliaDescriptionAndQty(text) {
+    let tokens = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+    while (tokens.length && /^(T|R|P|R&I|RI)$/i.test(tokens[0])) tokens.shift();
+
+    const leadingNumbers = [];
+    while (tokens.length && isNumericToken(tokens[0])) leadingNumbers.push(tokens.shift());
+
+    const trailingNumbers = [];
+    while (tokens.length && isNumericToken(tokens[tokens.length - 1])) trailingNumbers.unshift(tokens.pop());
+
+    let qtd = 1;
+    if (leadingNumbers.length) qtd = U.parseNumberBR(leadingNumbers[leadingNumbers.length - 1]) || 1;
+    if (trailingNumbers.length) qtd = U.parseNumberBR(trailingNumbers[trailingNumbers.length - 1]) || qtd || 1;
+
+    const desc = tokens
+      .join(' ')
+      .replace(/\b(Oficina|Seguradora|Fornecedor|Cliente)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return { desc, qtd };
+  }
+
+  U.normalizeCiliaPiece = function(piece) {
+    const p = { ...(piece || {}) };
+    let desc = String(p.desc || p.descricao || '').replace(/\s+/g, ' ').trim();
+    let codigo = String(p.codigo || p.cod || '').trim();
+    const prices = extractCiliaPrices(desc);
+    const codInDesc = desc.match(/C.?d[:.]\s*([A-Z0-9./-]+)/i);
+    if (!codigo && codInDesc) codigo = codInDesc[1].trim();
+
+    desc = desc
+      .replace(/C.?d[:.]\s*[A-Z0-9./-]+/gi, ' ')
+      .replace(/R\$\s*[\d.]+,\d{2}/gi, ' ')
+      .replace(/R\$\s*\d+\.\d{2}/gi, ' ')
+      .replace(/%\s*[\d.,]+/g, ' ')
+      .replace(/\b(Oficina|Seguradora|Fornecedor|Cliente)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const peeled = peelCiliaDescriptionAndQty(desc);
+    return {
+      ...p,
+      codigo,
+      desc: peeled.desc,
+      qtd: U.parseNumberBR(p.qtd || p.quantidade || 0) || peeled.qtd || 1,
+      venda: U.parseNumberBR(p.venda || p.valor || p.precoBruto || 0) || prices.bruto || U.parseNumberBR(p.ciliaValorLiquido || 0) || prices.liquido || 0,
+      ciliaValorLiquido: U.parseNumberBR(p.ciliaValorLiquido || p.valorLiquido || 0) || prices.liquido || 0,
+      ciliaDesconto: U.parseNumberBR(p.ciliaDesconto || p.desconto || 0) || prices.desconto || 0
+    };
+  };
+
+  U.normalizeCiliaPieces = function(pieces) {
+    return (pieces || [])
+      .map(U.normalizeCiliaPiece)
+      .filter(p => p.codigo || p.desc || U.parseNumberBR(p.venda) > 0);
+  };
+
+  U.parseCiliaPiecesFromLines = function(lines) {
+    const out = [];
+    (lines || []).forEach(line => {
+      const original = String(line || '').replace(/\s+/g, ' ').trim();
+      if (!original || !/R\$/i.test(original)) return;
+      const prices = extractCiliaPrices(original);
+      if (!prices.bruto && !prices.liquido) return;
+
+      const beforePrice = original.split(/R\$/i)[0].replace(/\s+/g, ' ').trim();
+      let codigo = '';
+      let descPart = beforePrice;
+
+      const codMarker = beforePrice.match(/^(.*)\s+C.?d[:.]\s*([A-Z0-9./-]+)(?:\s+\w+)?\s*$/i);
+      if (codMarker) {
+        descPart = codMarker[1].trim();
+        codigo = codMarker[2].trim();
+      } else {
+        const first = beforePrice.match(/^([A-Z0-9][A-Z0-9./-]{3,})\s+(.+)$/);
+        if (first && /\d/.test(first[1]) && !/^(TOTAL|PRECO|VALOR)$/i.test(first[1])) {
+          codigo = first[1].trim();
+          descPart = first[2].trim();
+        }
+      }
+
+      if (!codigo && !descPart) return;
+      const peeled = peelCiliaDescriptionAndQty(descPart);
+      if (!peeled.desc && !codigo) return;
+      out.push({
+        codigo,
+        desc: peeled.desc,
+        qtd: peeled.qtd || 1,
+        venda: prices.bruto || prices.liquido || 0,
+        ciliaValorLiquido: prices.liquido || 0,
+        ciliaDesconto: prices.desconto || 0
+      });
+    });
+    return U.normalizeCiliaPieces(out);
+  };
+
   U.parseCiliaPiecesFromTokens = function(textOrTokens) {
     const tokens = U.splitCiliaTokens(textOrTokens);
     const pieces = [];
@@ -206,10 +317,10 @@
       }
     }
 
-    if (pieces.length) return pieces;
+    if (pieces.length) return U.normalizeCiliaPieces(pieces);
 
     const text = tokens.join(' ');
-    const lineRegex = /(?:[TRP](?:\s+R&I)?)?\s*[\d,.]+\s+([\d,.]+)\s+(.+?)\s+C.?d[:.]?\s*([A-Z0-9./-]+)\s+\w+\s+R\$\s*([\d.,]+)\s+%\s*[\d.,]+\s+R\$\s*([\d.,]+)/gi;
+    const lineRegex = /(?:[TRP](?:\s+R&I)?)?\s*[\d,.]+\s+([\d,.]+)\s+(.+?)\s+C.?d[:.]\s*([A-Z0-9./-]+)\s+\w+\s+R\$\s*([\d.,]+)\s+%\s*[\d.,]+\s+R\$\s*([\d.,]+)/gi;
     let m;
     while ((m = lineRegex.exec(text))) {
       pieces.push({
@@ -220,7 +331,7 @@
         ciliaValorLiquido: U.parseNumberBR(m[5])
       });
     }
-    return pieces;
+    return U.normalizeCiliaPieces(pieces);
   };
 
   U.openApprovalModal = function(os, options) {

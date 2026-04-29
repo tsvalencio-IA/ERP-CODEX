@@ -1716,14 +1716,16 @@ window.toast = function(msg, type='ok') {
   setTimeout(() => { el.style.opacity='0'; setTimeout(()=>el.remove(),400); }, 3500);
 }
 
-async function audit(modulo, acao) {
+async function audit(modulo, acao, extra = {}) {
   try {
     await db.collection('lixeira_auditoria').add({
       tenantId:J.tid, modulo, acao,
-      usuario:J.nome, ts:new Date().toISOString()
+      usuario:J.nome, ts:new Date().toISOString(),
+      ...extra
     });
   } catch(e){}
 }
+window.audit = audit;
 
 const moeda = v => 'R$ ' + parseFloat(v||0).toFixed(2).replace('.',',');
 const dtBr = iso => iso ? new Date(iso).toLocaleDateString('pt-BR') : '-';

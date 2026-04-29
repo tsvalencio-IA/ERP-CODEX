@@ -242,6 +242,130 @@
     return { desc, qtd };
   }
 
+  function isCiliaPartHeaderText(text) {
+    const n = U.normalizeText(text);
+    return n.includes('pecas e mao de obra') ||
+      (n.includes('operacoes') && n.includes('qtd')) ||
+      (n.includes('descricao/codigo') && n.includes('preco'));
+  }
+
+  function isCiliaPartsTotalText(text) {
+    const n = U.normalizeText(text).replace(/\?/g, 'c');
+    return n.includes('total pecas') || n.startsWith('servicos');
+  }
+
+  function isCiliaMoneyText(text) {
+    return /^R\$\s*[\d.]+,\d{2}$/i.test(String(text || '').trim()) ||
+      /^R\$\s*\d+\.\d{2}$/i.test(String(text || '').trim());
+  }
+
+  function comparePdfSpans(a, b) {
+    return (a.page - b.page) || (b.y - a.y) || (a.x - b.x);
+  }
+
+  function isAfterPdfStart(sp, start) {
+    if (!start) return true;
+    return sp.page > start.page || (sp.page === start.page && sp.y < start.y);
+  }
+
+  function isBeforePdfEnd(sp, end) {
+    if (!end) return true;
+    return sp.page < end.page || (sp.page === end.page && sp.y > end.y);
+  }
+
+  U.isSaneCiliaPieces = function(pieces) {
+    const list = pieces || [];
+    if (!list.length) return false;
+    const badDesc = list.filter(p => {
+      const n = U.normalizeText(p.desc);
+      return !n ||
+        n === 'r$' ||
+        n.startsWith('r$ ') ||
+        n.includes('total pecas') ||
+        n.includes('servicos') ||
+        n.includes('descricao da peca') ||
+        n.includes('descricao/codigo') ||
+        n.includes('fornecimento') ||
+        n.includes('desconto');
+    }).length;
+    const badQty = list.filter(p => {
+      const qtd = U.parseNumberBR(p.qtd || 0);
+      return !qtd || qtd > 99;
+    }).length;
+    return badDesc / list.length <= 0.12 && badQty / list.length <= 0.12;
+  };
+
+  U.parseCiliaPiecesFromSpans = function(spans) {
+    const all = (spans || [])
+      .map((sp, idx) => ({
+        text: String(sp.text || sp.str || '').replace(/\s+/g, ' ').trim(),
+        x: Number(sp.x ?? sp.transform?.[4] ?? 0),
+        y: Number(sp.y ?? sp.transform?.[5] ?? 0),
+        page: Number(sp.page || sp.pageNumber || 1),
+        idx
+      }))
+      .filter(sp => sp.text)
+      .sort(comparePdfSpans);
+
+    if (!all.length) return [];
+    const start = all.find(sp => isCiliaPartHeaderText(sp.text));
+    const end = all.find(sp => isAfterPdfStart(sp, start) && isCiliaPartsTotalText(sp.text));
+    const inParts = all.filter(sp => isAfterPdfStart(sp, start) && isBeforePdfEnd(sp, end));
+
+    const anchors = inParts.filter(sp =>
+      sp.x >= 88 && sp.x <= 125 &&
+      /^\d+(?:[,.]\d+)$/.test(sp.text) &&
+      !sp.text.includes(',') // no Cilia PDF, "Qtd" vem como 1.00/2.00; tempos usam virgula
+    ).sort(comparePdfSpans);
+
+    const pieces = [];
+    anchors.forEach((anchor, index) => {
+      const prev = anchors[index - 1];
+      const upperFromPrev = prev && prev.page === anchor.page ? prev.y - 7 : Infinity;
+      const upper = Math.min(anchor.y + 12, upperFromPrev);
+      const lower = anchor.y - 11;
+
+      const rowSpans = inParts
+        .filter(sp => sp.page === anchor.page && Math.abs(sp.y - anchor.y) <= 2.8)
+        .sort((a, b) => a.x - b.x);
+
+      const descSpans = inParts
+        .filter(sp => sp.page === anchor.page && sp.x >= 120 && sp.x <= 345 && sp.y <= upper && sp.y >= lower)
+        .sort(comparePdfSpans);
+
+      const descParts = [];
+      let codigo = '';
+      descSpans.forEach(sp => {
+        if (/^C.?d[:.]?/i.test(sp.text)) {
+          const m = sp.text.match(/^C.?d[:.]?\s*(.*)$/i);
+          codigo = cleanCiliaCode(m?.[1] || '') || codigo;
+          return;
+        }
+        if (isCiliaPartHeaderText(sp.text) || isCiliaPartsTotalText(sp.text)) return;
+        if (isCiliaMoneyText(sp.text)) return;
+        descParts.push(sp.text);
+      });
+
+      const money = rowSpans.filter(sp => isCiliaMoneyText(sp.text));
+      const brutoSpan = money.find(sp => sp.x >= 400 && sp.x < 490) || money[0];
+      const liquidoSpan = money.find(sp => sp.x >= 520) || money[money.length - 1];
+      const descontoSpan = rowSpans.find(sp => /%\s*[\d.,]+/.test(sp.text));
+      const desc = descParts.join(' ').replace(/\s+/g, ' ').trim();
+      if (!desc && !codigo) return;
+
+      pieces.push({
+        codigo: codigo || 'sem oem',
+        desc,
+        qtd: U.parseNumberBR(anchor.text) || 1,
+        venda: U.parseNumberBR(brutoSpan?.text || 0),
+        ciliaValorLiquido: liquidoSpan && liquidoSpan !== brutoSpan ? U.parseNumberBR(liquidoSpan.text) : 0,
+        ciliaDesconto: U.parseNumberBR(String(descontoSpan?.text || '').replace('%', ''))
+      });
+    });
+
+    return U.normalizeCiliaPieces(pieces);
+  };
+
   U.normalizeCiliaPiece = function(piece) {
     const p = { ...(piece || {}) };
     let desc = String(p.desc || p.descricao || '').replace(/\s+/g, ' ').trim();

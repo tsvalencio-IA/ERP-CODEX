@@ -1828,6 +1828,7 @@ async function _ciliaProcessarPDF(file) {
         if (item.str.trim()) {
           allSpans.push({
             text: item.str.trim(),
+            page: i,
             x: Math.round(item.transform[4]),
             y: Math.round(item.transform[5])
           });
@@ -1849,9 +1850,15 @@ async function _ciliaProcessarPDF(file) {
       .map(y => linhasMap[y].sort((a, b) => a.x - b.x).map(s => s.text).join(' '));
 
     const tokensOrdenados = linhas.join(' ').split(/\s+/).filter(Boolean);
-    let pecas = OSU().parseCiliaPiecesFromLines ? OSU().parseCiliaPiecesFromLines(linhas) : [];
-    if (!pecas.length) {
-      pecas = OSU().parseCiliaPiecesFromTokens ? OSU().parseCiliaPiecesFromTokens(tokensOrdenados) : [];
+    const utils = OSU();
+    const sane = lista => !utils.isSaneCiliaPieces || utils.isSaneCiliaPieces(lista || []);
+    let pecas = utils.parseCiliaPiecesFromSpans ? utils.parseCiliaPiecesFromSpans(allSpans) : [];
+    if (!pecas.length || !sane(pecas)) {
+      pecas = utils.parseCiliaPiecesFromLines ? utils.parseCiliaPiecesFromLines(linhas) : [];
+    }
+    if (!pecas.length || !sane(pecas)) {
+      const porTokens = utils.parseCiliaPiecesFromTokens ? utils.parseCiliaPiecesFromTokens(tokensOrdenados) : [];
+      pecas = sane(porTokens) ? porTokens : [];
     }
     const brl = s => numBR(s);
 
@@ -1898,8 +1905,8 @@ async function _ciliaProcessarPDF(file) {
       }
     }
 
-    if (!pecas.length) {
-      if (typeof window.toast === 'function') window.toast('Não foi possível extrair peças do PDF. Tente exportar o Cília em XML para melhor resultado.', 'warn');
+    if (!pecas.length || !sane(pecas)) {
+      if (typeof window.toast === 'function') window.toast('Não foi possível extrair as peças do PDF Cília com segurança. Tente exportar o Cília em XML para melhor resultado.', 'warn');
       return;
     }
     _ciliaAdicionarPecas(pecas);

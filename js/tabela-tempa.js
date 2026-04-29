@@ -1,7 +1,7 @@
 /**
  * thIAguinho ERP — Tabela Tempária SINDIREPA-SP
  *
- * Carrega o JSON com 7.652 itens reais e fornece busca rápida.
+ * Carrega o JSON completo e fornece busca rápida.
  * Indexação em memória para pesquisa instantânea.
  *
  * APIs públicas:
@@ -33,7 +33,7 @@
     TT.carregando = true;
     try {
       // Tenta primeiro a versão minificada (mais rápida)
-      const resp = await fetch('data/tabela-tempa.min.json', { cache: 'force-cache' });
+      const resp = await fetch('data/tabela-tempa.min.json', { cache: 'no-cache' });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       TT.dados = await resp.json();
       TT.carregada = true;
@@ -105,7 +105,7 @@
     if (!tbody) return;
 
     if (!TT.carregada) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--cyan);">⏳ Carregando 7.652 itens da Tabela Tempária SINDIREPA-SP...</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--cyan);">⏳ Carregando Tabela Tempária SINDIREPA-SP completa...</td></tr>';
       try {
         await window.tempaCarregar();
       } catch (e) {

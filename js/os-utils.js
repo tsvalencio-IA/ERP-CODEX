@@ -157,19 +157,35 @@
     };
   }
 
+  function cleanCiliaCode(value) {
+    const code = String(value || '').trim();
+    const n = U.normalizeText(code);
+    if (!code || /^-+$/.test(code)) return '';
+    if (/^(oficina|seguradora|fornecedor|cliente)$/i.test(n)) return '';
+    return code;
+  }
+
+  function stripCiliaSummaryTail(text) {
+    return String(text || '')
+      .replace(/\bTotal\s+Pe.{0,3}as:?[\s\S]*$/i, '')
+      .replace(/\bTotal\s+Geral:?[\s\S]*$/i, '')
+      .trim();
+  }
+
   function isNumericToken(t) {
     return /^\d+(?:[,.]\d+)?$/.test(String(t || ''));
   }
 
   function isCiliaSummaryOrServiceBoundary(line) {
     const n = U.normalizeText(line);
-    return n.includes('total pecas') ||
-      n.includes('total geral') ||
-      n.includes('subtotal') ||
-      n.includes('mao de obra do orcamento') ||
-      n.includes('total mao de obra') ||
-      n.startsWith('servicos') ||
-      n.includes(' servicos ');
+    const loose = n.replace(/\?/g, 'c');
+    return loose.includes('total pecas') ||
+      loose.includes('total geral') ||
+      loose.includes('subtotal') ||
+      loose.includes('mao de obra do orcamento') ||
+      loose.includes('total mao de obra') ||
+      loose.startsWith('servicos') ||
+      loose.includes(' servicos ');
   }
 
   function ciliaPieceLinesOnly(lines) {
@@ -198,19 +214,27 @@
 
   function peelCiliaDescriptionAndQty(text) {
     let tokens = String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
-    while (tokens.length && /^(T|R|P|R&I|RI)$/i.test(tokens[0])) tokens.shift();
+    let i = 0;
+    const numericBeforeDesc = [];
+    while (i < tokens.length) {
+      if (/^(T|R|P|R&I|RI)$/i.test(tokens[i])) { i++; continue; }
+      if (isNumericToken(tokens[i])) {
+        numericBeforeDesc.push({ idx: i, value: tokens[i] });
+        i++;
+        continue;
+      }
+      break;
+    }
 
-    const leadingNumbers = [];
-    while (tokens.length && isNumericToken(tokens[0])) leadingNumbers.push(tokens.shift());
-
+    let descTokens = tokens.slice(i);
     const trailingNumbers = [];
-    while (tokens.length && isNumericToken(tokens[tokens.length - 1])) trailingNumbers.unshift(tokens.pop());
+    while (descTokens.length && isNumericToken(descTokens[descTokens.length - 1])) trailingNumbers.unshift(descTokens.pop());
 
     let qtd = 1;
-    if (leadingNumbers.length) qtd = U.parseNumberBR(leadingNumbers[leadingNumbers.length - 1]) || 1;
+    if (numericBeforeDesc.length) qtd = U.parseNumberBR(numericBeforeDesc[numericBeforeDesc.length - 1].value) || 1;
     if (trailingNumbers.length) qtd = U.parseNumberBR(trailingNumbers[trailingNumbers.length - 1]) || qtd || 1;
 
-    const desc = tokens
+    const desc = descTokens
       .join(' ')
       .replace(/\b(Oficina|Seguradora|Fornecedor|Cliente)\b/gi, ' ')
       .replace(/\s+/g, ' ')
@@ -221,10 +245,10 @@
   U.normalizeCiliaPiece = function(piece) {
     const p = { ...(piece || {}) };
     let desc = String(p.desc || p.descricao || '').replace(/\s+/g, ' ').trim();
-    let codigo = String(p.codigo || p.cod || '').trim();
+    let codigo = cleanCiliaCode(p.codigo || p.cod || '');
     const prices = extractCiliaPrices(desc);
     const codInDesc = desc.match(/C.?d[:.]\s*([A-Z0-9./-]+)/i);
-    if (!codigo && codInDesc) codigo = codInDesc[1].trim();
+    if (!codigo && codInDesc) codigo = cleanCiliaCode(codInDesc[1]);
 
     desc = desc
       .replace(/C.?d[:.]\s*[A-Z0-9./-]+/gi, ' ')
@@ -261,9 +285,39 @@
   };
 
   U.parseCiliaPiecesFromLines = function(lines) {
+    const sectionLines = ciliaPieceLinesOnly(lines);
+    const blockPieces = [];
+    sectionLines
+      .join('\n')
+      .split(/\n(?=\s*(?:T\s+)?(?:R&I|RI|R|P)\b)/i)
+      .forEach(block => {
+        const original = stripCiliaSummaryTail(String(block || '').replace(/\s+/g, ' ').trim());
+        if (!original || isCiliaSummaryOrServiceBoundary(original)) return;
+        if (!/^(?:T\s+)?(?:R&I|RI|R|P)\b/i.test(original)) return;
+
+        const codeMatch = original.match(/C.?d[:.]\s*([A-Z0-9./-]*)/i);
+        const codigo = cleanCiliaCode(codeMatch?.[1]) || 'sem oem';
+        const beforeCode = original.split(/C.?d[:.]/i)[0];
+        const prices = extractCiliaPrices(original);
+        const semPreco = /C.?d[:.]?.*-\s+-\s+-\s+-\s*$/i.test(original);
+        if (!prices.bruto && !prices.liquido && !semPreco) return;
+
+        const peeled = peelCiliaDescriptionAndQty(beforeCode);
+        if (!peeled.desc && codigo === 'sem oem') return;
+        blockPieces.push({
+          codigo,
+          desc: peeled.desc,
+          qtd: peeled.qtd || 1,
+          venda: prices.bruto || 0,
+          ciliaValorLiquido: prices.liquido || 0,
+          ciliaDesconto: prices.desconto || 0
+        });
+      });
+    if (blockPieces.length) return U.normalizeCiliaPieces(blockPieces);
+
     const out = [];
-    ciliaPieceLinesOnly(lines).forEach(line => {
-      const original = String(line || '').replace(/\s+/g, ' ').trim();
+    sectionLines.forEach(line => {
+      const original = stripCiliaSummaryTail(String(line || '').replace(/\s+/g, ' ').trim());
       if (!original || !/R\$/i.test(original)) return;
       if (isCiliaSummaryOrServiceBoundary(original)) return;
       const prices = extractCiliaPrices(original);
@@ -276,11 +330,11 @@
       const codMarker = beforePrice.match(/^(.*)\s+C.?d[:.]\s*([A-Z0-9./-]+)(?:\s+\w+)?\s*$/i);
       if (codMarker) {
         descPart = codMarker[1].trim();
-        codigo = codMarker[2].trim();
+        codigo = cleanCiliaCode(codMarker[2]);
       } else {
         const first = beforePrice.match(/^([A-Z0-9][A-Z0-9./-]{3,})\s+(.+)$/);
         if (first && /\d/.test(first[1]) && !/^\d+[,.]\d+$/.test(first[1]) && !/^(TOTAL|PRECO|VALOR)$/i.test(first[1])) {
-          codigo = first[1].trim();
+          codigo = cleanCiliaCode(first[1]);
           descPart = first[2].trim();
         }
       }

@@ -24,6 +24,35 @@
     return pct > 1 ? +(pct / 100).toFixed(6) : pct;
   }
 
+  function normalizarSecao(txt) {
+    return String(txt || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  }
+
+  function classificarSecao(serv) {
+    const base = limparTexto(serv.sistema || serv.secaoHoraLabel || serv.sistemaTabela || '');
+    const t = normalizarSecao([serv.sistema, serv.secaoHoraLabel, serv.sistemaTabela, serv.desc].filter(Boolean).join(' '));
+    if (/\b(funilaria|lanternagem|pintura|pintar|lataria|parachoque|para choque)\b/.test(t)) return 'FUNILARIA / PINTURA';
+    if (/\b(tapecaria|capotaria|banco|assento|encosto|forro|estof)\b/.test(t)) return 'TAPECARIA / CAPOTARIA';
+    if (/\b(borracharia|pneu|pneus|roda|rodas|calota|balanceamento)\b/.test(t)) return 'BORRACHARIA';
+    if (/\b(lavagem|higienizacao|higienizar|limpeza interna|polimento)\b/.test(t)) return 'LAVAGEM / HIGIENIZACAO';
+    if (/\b(injecao|bico|bicos|combustivel|alimentacao)\b/.test(t)) return 'INJECAO / ALIMENTACAO';
+    if (/\b(eletrica|eletrico|eletronica|alternador|bateria|lampada|farol|sensor)\b/.test(t)) return 'ELETRICA';
+    if (/\b(mecanica|motor|cambio|transmissao|arrefecimento|suspensao|freio|direcao|retifica)\b/.test(t)) return 'MECANICA';
+    return base ? base.toUpperCase().slice(0, 48) : 'OUTROS SERVICOS';
+  }
+
+  function resumirSecoes(linhasServ) {
+    const out = {};
+    (linhasServ || []).forEach(s => {
+      const secao = classificarSecao(s);
+      if (!out[secao]) out[secao] = { horas: 0, total: 0, qtd: 0 };
+      out[secao].horas += n(s.tempo || 0);
+      out[secao].total += n(s.total || 0);
+      out[secao].qtd += 1;
+    });
+    return Object.entries(out).sort((a, b) => b[1].total - a[1].total);
+  }
+
   function dataExtenso(cidade) {
     const hoje = new Date();
     const meses = ['JANEIRO','FEVEREIRO','MARCO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
@@ -31,12 +60,81 @@
   }
 
   function oesNumero(cli, os) {
-    const modelo = cli.govOesModelo || 'ORC ###/2026';
+    const modelo = pick(cli.govOesModelo, cli.oesModelo, os.oesModelo, os.oes, 'ORC ###/2026');
     return modelo.replace(/###/g, String(os.id || '').slice(-3).toUpperCase());
   }
 
   function limparTexto(value) {
     return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  }
+
+  function pick(...values) {
+    for (const value of values) {
+      if (value === undefined || value === null) continue;
+      const txt = limparTexto(value);
+      if (txt !== '') return value;
+    }
+    return '';
+  }
+
+  function upperTexto(...values) {
+    return limparTexto(pick(...values)).toUpperCase();
+  }
+
+  function enderecoPessoa(pessoa) {
+    if (!pessoa) return '';
+    return pick(
+      pessoa.enderecoCompleto,
+      [
+        pick(pessoa.endereco, pessoa.rua, pessoa.logradouro),
+        pick(pessoa.numero, pessoa.num, pessoa.n),
+        pessoa.bairro,
+        pick(pessoa.cidade, pessoa.municipio),
+        pessoa.uf,
+        pessoa.cep
+      ].filter(v => limparTexto(v)).join(', ')
+    );
+  }
+
+  function dadosCliente(cli, os) {
+    cli = cli || {};
+    os = os || {};
+    return {
+      unidade: pick(cli.govUnidade, cli.unidade, cli.razaoSocial, cli.nome, os.cliente),
+      doc: pick(cli.doc, cli.cnpj, cli.cpf, os.cpf),
+      endereco: enderecoPessoa(cli),
+      fiscal: pick(cli.govFiscal, cli.fiscalContrato, cli.fiscal, cli.responsavel),
+      cabecalho: pick(cli.govCabecalho, cli.cabecalhoInstitucional),
+      cidade: pick(cli.cidade, cli.municipio)
+    };
+  }
+
+  function dadosVeiculo(veiculo, os) {
+    veiculo = veiculo || {};
+    os = os || {};
+    return {
+      marca: upperTexto(veiculo.marca, os.marca),
+      modelo: upperTexto(veiculo.modelo, os.veiculo, os.modelo),
+      ano: pick(veiculo.ano, os.ano),
+      placa: upperTexto(veiculo.placa, os.placa),
+      chassis: upperTexto(veiculo.chassis, veiculo.chassi, os.chassis, os.chassi),
+      patrimonio: pick(veiculo.patrimonio, veiculo.patrimonioNumero, veiculo.patrimonioId, os.patrimonio, os.patrimonioNumero),
+      prefixo: upperTexto(veiculo.prefixo, os.prefixo),
+      km: pick(os.km, veiculo.km)
+    };
+  }
+
+  function dadosTenant(tenant) {
+    tenant = tenant || {};
+    return {
+      razaoSocial: pick(tenant.razaoSocial, tenant.razao, tenant.nomeFantasia, tenant.tnome, tenant.nome),
+      cnpj: pick(tenant.cnpj, tenant.doc, tenant.documento),
+      endereco: enderecoOficina(tenant),
+      telefone: pick(tenant.telefone, tenant.wpp, tenant.celular),
+      orcamentista: pick(tenant.orcamentista, tenant.responsavel, tenant.nome, tenant.tnome),
+      representante: pick(tenant.representante, tenant.responsavel, tenant.orcamentista, tenant.nome, tenant.tnome),
+      cidade: pick(tenant.cidade, tenant.municipio)
+    };
   }
 
   function cloneStyle(style) {
@@ -104,7 +202,17 @@
   }
 
   function enderecoOficina(tenant) {
-    return tenant.enderecoCompleto || [tenant.endereco, tenant.numero, tenant.bairro, tenant.cidade, tenant.uf, tenant.cep].filter(Boolean).join(', ');
+    return pick(
+      tenant.enderecoCompleto,
+      [
+        pick(tenant.endereco, tenant.rua, tenant.logradouro),
+        pick(tenant.numero, tenant.num, tenant.n),
+        tenant.bairro,
+        pick(tenant.cidade, tenant.municipio),
+        tenant.uf,
+        tenant.cep
+      ].filter(v => limparTexto(v)).join(', ')
+    );
   }
 
   function aplicarAjustesCabecalho(ws) {
@@ -199,12 +307,68 @@
     estilizarResumo(ws, row, false);
   }
 
+  function inserirResumoSecoes(ws, startRow, resumoSecoes) {
+    if (!resumoSecoes || !resumoSecoes.length) return;
+    const titleRow = startRow;
+    const headRow = startRow + 1;
+    const primeiroItem = startRow + 2;
+
+    [titleRow, headRow, ...resumoSecoes.map((_, i) => primeiroItem + i)].forEach(row => {
+      limparRangeResumo(ws, row);
+      ws.getRow(row).hidden = false;
+      ['B','D','E','F','G','H'].forEach(col => {
+        const cell = ws.getCell(col + row);
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FF000000' } },
+          left: { style: 'thin', color: { argb: 'FF000000' } },
+          bottom: { style: 'thin', color: { argb: 'FF000000' } },
+          right: { style: 'thin', color: { argb: 'FF000000' } }
+        };
+        cell.alignment = { vertical: 'middle', wrapText: true, shrinkToFit: true };
+        cell.font = { name: 'Arial', size: 9, color: { argb: 'FF000000' } };
+      });
+    });
+
+    safeUnmerge(ws, `B${titleRow}:H${titleRow}`);
+    ws.mergeCells(`B${titleRow}:H${titleRow}`);
+    setCell(ws, 'B' + titleRow, 'RESUMO POR SECAO DE MAO DE OBRA DA O.S.');
+    ws.getCell('B' + titleRow).alignment = { horizontal: 'center', vertical: 'middle', shrinkToFit: true };
+    ws.getCell('B' + titleRow).font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF000000' } };
+    ws.getCell('B' + titleRow).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+    ws.getRow(titleRow).height = 18;
+
+    safeUnmerge(ws, `B${headRow}:F${headRow}`);
+    ws.mergeCells(`B${headRow}:F${headRow}`);
+    setCell(ws, 'B' + headRow, 'SECAO');
+    setCell(ws, 'G' + headRow, 'HORAS');
+    setCell(ws, 'H' + headRow, 'VALOR');
+    ['B','G','H'].forEach(col => {
+      const cell = ws.getCell(col + headRow);
+      cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF000000' } };
+      cell.alignment = { horizontal: col === 'B' ? 'left' : 'center', vertical: 'middle', shrinkToFit: true };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDEDED' } };
+    });
+
+    resumoSecoes.forEach(([secao, item], idx) => {
+      const row = primeiroItem + idx;
+      safeUnmerge(ws, `B${row}:F${row}`);
+      ws.mergeCells(`B${row}:F${row}`);
+      setCell(ws, 'B' + row, secao);
+      setNumberCell(ws, 'G' + row, item.horas, '0.00');
+      setMoneyCell(ws, 'H' + row, item.total);
+      ws.getCell('B' + row).alignment = { horizontal: 'left', vertical: 'middle', shrinkToFit: true, wrapText: true };
+      ws.getCell('G' + row).alignment = { horizontal: 'center', vertical: 'middle' };
+      ws.getCell('H' + row).alignment = { horizontal: 'right', vertical: 'middle', shrinkToFit: true };
+      ws.getRow(row).height = 18;
+    });
+  }
+
   function formatarCabecalhoPM(texto) {
     const linhas = String(texto || '')
       .split(/\r?\n/)
       .map(l => limparTexto(l))
       .filter(Boolean);
-    return linhas.map(l => '                                      ' + l).join('\n');
+    return linhas.join('\n');
   }
 
   function coletarDados(os, cli, veiculo) {
@@ -265,13 +429,21 @@
     const ws = wb.worksheets[0];
 
     const { tenant, linhasServ, linhasPecas } = coletarDados(os, cli, veiculo);
+    const resumoSecoes = resumirSecoes(linhasServ);
+    const dc = dadosCliente(cli, os);
+    const dv = dadosVeiculo(veiculo, os);
+    const dt = dadosTenant(tenant);
 
     const servRowsWanted = Math.max(linhasServ.length + 3, 4);
     const servExtra = Math.max(0, servRowsWanted - SERV_CAPACITY);
     inserirLinhasExtras(ws, SERV_TOTAL, SERV_END, servExtra);
     const servEnd = SERV_END + servExtra;
     const servTotal = SERV_TOTAL + servExtra;
-    const pecaShift = servExtra;
+    const resumoSecoesRows = resumoSecoes.length ? resumoSecoes.length + 2 : 0;
+    if (resumoSecoesRows) {
+      ws.spliceRows(servTotal + 1, 0, ...Array.from({ length: resumoSecoesRows }, () => []));
+    }
+    const pecaShift = servExtra + resumoSecoesRows;
     const pecaStart = PECA_START + pecaShift;
     const pecaEndBase = PECA_END + pecaShift;
     const pecaTotalBase = PECA_TOTAL + pecaShift;
@@ -290,31 +462,29 @@
     const dataRow = pecaTotal + 7;
     const representanteRow = pecaTotal + 11;
 
-    const cabecalho = (cli.govCabecalho || '').trim() || 'SECRETARIA DA SEGURANCA PUBLICA\nPOLICIA MILITAR DO ESTADO DE SAO PAULO';
-    const razaoOficina = tenant.razaoSocial || tenant.nomeFantasia || tenant.tnome || '';
-    const telefoneOficina = tenant.telefone || tenant.wpp || '';
-    const representante = tenant.representante || tenant.responsavel || tenant.orcamentista || tenant.nome || '';
+    const cabecalho = limparTexto(dc.cabecalho) || 'SECRETARIA DA SEGURANCA PUBLICA\nPOLICIA MILITAR DO ESTADO DE SAO PAULO';
+    const representante = dt.representante;
     setCell(ws, 'B1', formatarCabecalhoPM(cabecalho));
     setCell(ws, 'A3', `REFERENCIA: ORDEM E EXECUCAO DE SERVICOS No ${oesNumero(cli, os)}`);
-    setCell(ws, 'A5', `MARCA: ${(veiculo.marca || '').toUpperCase()}`);
-    setCell(ws, 'C5', `MODELO: ${(veiculo.modelo || '').toUpperCase()}`);
-    setCell(ws, 'E5', `ANO: ${veiculo.ano || ''}`);
-    setCell(ws, 'G5', `PLACA: ${(veiculo.placa || os.placa || '').toUpperCase()}`);
-    setCell(ws, 'A6', `CHASSIS: ${(veiculo.chassis || '').toUpperCase()}`);
-    setCell(ws, 'D6', `PATRIMONIO: ${veiculo.patrimonio || ''}`);
-    setCell(ws, 'A7', `KM: ${os.km || veiculo.km || ''}`);
-    setCell(ws, 'C7', `PREFIXO: ${(veiculo.prefixo || '').toUpperCase()}`);
-    setCell(ws, 'E7', `OPM DETENTORA: ${cli.govUnidade || cli.nome || ''}`);
-    setCell(ws, 'A9', `RAZAO SOCIAL : ${razaoOficina}`);
-    setCell(ws, 'E9', `CNPJ: ${tenant.cnpj || ''}`);
-    setCell(ws, 'A10', `ENDERECO: ${enderecoOficina(tenant)}`);
-    setCell(ws, 'A11', `TELEFONE: ${telefoneOficina}`);
-    setCell(ws, 'D11', `ORCAMENTISTA: ${tenant.orcamentista || tenant.nome || ''}`);
+    setCell(ws, 'A5', `MARCA: ${dv.marca}`);
+    setCell(ws, 'C5', `MODELO: ${dv.modelo}`);
+    setCell(ws, 'E5', `ANO: ${dv.ano}`);
+    setCell(ws, 'G5', `PLACA: ${dv.placa}`);
+    setCell(ws, 'A6', `CHASSIS: ${dv.chassis}`);
+    setCell(ws, 'D6', `PATRIMONIO: ${dv.patrimonio}`);
+    setCell(ws, 'A7', `KM: ${dv.km}`);
+    setCell(ws, 'C7', `PREFIXO: ${dv.prefixo}`);
+    setCell(ws, 'E7', `OPM DETENTORA: ${dc.unidade}`);
+    setCell(ws, 'A9', `RAZAO SOCIAL : ${dt.razaoSocial}`);
+    setCell(ws, 'E9', `CNPJ: ${dt.cnpj}`);
+    setCell(ws, 'A10', `ENDERECO: ${dt.endereco}`);
+    setCell(ws, 'A11', `TELEFONE: ${dt.telefone}`);
+    setCell(ws, 'D11', `ORCAMENTISTA: ${dt.orcamentista}`);
     setCell(ws, 'A12', `REPRESENTANTE LEGAL: ${representante}`);
-    setCell(ws, 'A14', `UNIDADE : ${cli.govUnidade || cli.nome || ''}`);
-    setCell(ws, 'E14', `CNPJ: ${cli.doc || ''}`);
-    setCell(ws, 'A15', `ENDERECO: ${[cli.rua, cli.num, cli.bairro, cli.cidade].filter(Boolean).join(', ')}`);
-    setCell(ws, 'A17', `FISCAL DO CONTRATO: ${cli.govFiscal || ''}`);
+    setCell(ws, 'A14', `UNIDADE : ${dc.unidade}`);
+    setCell(ws, 'E14', `CNPJ: ${dc.doc}`);
+    setCell(ws, 'A15', `ENDERECO: ${dc.endereco}`);
+    setCell(ws, 'A17', `FISCAL DO CONTRATO: ${dc.fiscal}`);
     aplicarAjustesCabecalho(ws);
 
     prepararLinhasDados(ws, SERV_START, servEnd, linhasServ.length);
@@ -358,6 +528,7 @@
       representanteRow
     ]);
     linhaTotalServicos(ws, servTotal, totalHoras, totalMO);
+    inserirResumoSecoes(ws, servTotal + 1, resumoSecoes);
     linhaTotalPecas(ws, pecaTotal, totalPecas);
     linhaResumoValor(ws, totalGeralRow, 'TOTAL GERAL', 0, { blankValue: true });
     linhaResumoValor(ws, vistoriaRow, 'VALOR DA VISTORIA TECNICA COMPLEMENTAR AO ESCOPO DE SERVICOS', 0, { blankValue: true });
@@ -365,7 +536,7 @@
     linhaResumoValor(ws, resumoMORow, 'VALOR TOTAL DE MAO DE OBRA', totalMO);
     linhaResumoValor(ws, resumoTotalRow, 'TOTAL GERAL', contrato);
     linhaResumoValor(ws, contratoRow, 'VALOR DO CONTRATO', contrato, { contrato: true });
-    setCell(ws, 'A' + dataRow, dataExtenso(tenant.cidade || cli.cidade));
+    setCell(ws, 'A' + dataRow, dataExtenso(dt.cidade || dc.cidade));
     setCell(ws, 'A' + representanteRow, String(representante).toUpperCase());
 
     ws.pageSetup = {
@@ -377,7 +548,7 @@
       printArea: `A1:H${representanteRow}`
     };
 
-    const fname = `${(veiculo.prefixo || os.id.slice(-6).toUpperCase())}_PLANILHA_DE_CUSTOS.xlsx`;
+    const fname = `${(dv.prefixo || String(os.id || '').slice(-6).toUpperCase() || 'OS')}_PLANILHA_DE_CUSTOS.xlsx`;
     const out = await wb.xlsx.writeBuffer();
     const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const a = document.createElement('a');
@@ -394,40 +565,49 @@
   async function exportarFallbackSheetJS(os, cli, veiculo) {
     if (typeof XLSX === 'undefined') throw new Error('Biblioteca XLSX nao carregou.');
     const { tenant, linhasServ, linhasPecas } = coletarDados(os, cli, veiculo);
+    const resumoSecoes = resumirSecoes(linhasServ);
+    const dc = dadosCliente(cli, os);
+    const dv = dadosVeiculo(veiculo, os);
+    const dt = dadosTenant(tenant);
     const rows = [
-      ['SECRETARIA DA SEGURANCA PUBLICA POLICIA MILITAR DO ESTADO DE SAO PAULO'],
+      [dc.cabecalho || 'SECRETARIA DA SEGURANCA PUBLICA POLICIA MILITAR DO ESTADO DE SAO PAULO'],
       ['PLANILHA DE COMPOSICAO DE CUSTOS'],
       [`REFERENCIA: ORDEM E EXECUCAO DE SERVICOS No ${oesNumero(cli, os)}`],
       ['DADOS DA VIATURA'],
-      [`MARCA: ${veiculo.marca || ''}`, `MODELO: ${veiculo.modelo || ''}`, `ANO: ${veiculo.ano || ''}`, `PLACA: ${veiculo.placa || os.placa || ''}`],
-      [`CHASSIS: ${veiculo.chassis || ''}`, `PATRIMONIO: ${veiculo.patrimonio || ''}`],
-      [`KM: ${os.km || veiculo.km || ''}`, `PREFIXO: ${veiculo.prefixo || ''}`, `OPM DETENTORA: ${cli.govUnidade || cli.nome || ''}`],
+      [`MARCA: ${dv.marca}`, `MODELO: ${dv.modelo}`, `ANO: ${dv.ano}`, `PLACA: ${dv.placa}`],
+      [`CHASSIS: ${dv.chassis}`, `PATRIMONIO: ${dv.patrimonio}`],
+      [`KM: ${dv.km}`, `PREFIXO: ${dv.prefixo}`, `OPM DETENTORA: ${dc.unidade}`],
       ['DADOS DA EMPRESA'],
-      [`RAZAO SOCIAL: ${tenant.razaoSocial || tenant.nomeFantasia || tenant.tnome || ''}`, `CNPJ: ${tenant.cnpj || ''}`],
-      [`ENDERECO: ${enderecoOficina(tenant)}`],
-      [`TELEFONE: ${tenant.telefone || tenant.wpp || ''}`, `ORCAMENTISTA: ${tenant.orcamentista || tenant.nome || ''}`],
-      [`REPRESENTANTE LEGAL: ${tenant.representante || tenant.responsavel || tenant.nome || ''}`],
+      [`RAZAO SOCIAL: ${dt.razaoSocial}`, `CNPJ: ${dt.cnpj}`],
+      [`ENDERECO: ${dt.endereco}`],
+      [`TELEFONE: ${dt.telefone}`, `ORCAMENTISTA: ${dt.orcamentista}`],
+      [`REPRESENTANTE LEGAL: ${dt.representante}`],
       ['DADOS DO CLIENTE'],
-      [`UNIDADE: ${cli.govUnidade || cli.nome || ''}`, `CNPJ: ${cli.doc || ''}`],
-      [`ENDERECO: ${[cli.rua, cli.num, cli.bairro, cli.cidade].filter(Boolean).join(', ')}`],
-      [`FISCAL DO CONTRATO: ${cli.govFiscal || ''}`],
+      [`UNIDADE: ${dc.unidade}`, `CNPJ: ${dc.doc}`],
+      [`ENDERECO: ${dc.endereco}`],
+      [`FISCAL DO CONTRATO: ${dc.fiscal}`],
       [],
       ['DESCRICAO DO SISTEMA','DESCRICAO DO SERVICO','TMO','VALOR','DESC.','VALOR']
     ];
     linhasServ.forEach(s => rows.push([s.sistema, s.desc, s.tempo, s.valorHora, s.descPct, s.total]));
     rows.push(['TOTAL DE SERVICOS', '', linhasServ.reduce((sum, s) => sum + s.tempo, 0), '', '', linhasServ.reduce((sum, s) => sum + s.total, 0)]);
+    if (resumoSecoes.length) {
+      rows.push([]);
+      rows.push(['RESUMO POR SECAO DE MAO DE OBRA DA O.S.', '', '', '', 'HORAS', 'VALOR']);
+      resumoSecoes.forEach(([secao, item]) => rows.push([secao, '', '', '', item.horas, item.total]));
+    }
     rows.push([]);
     rows.push(['CODIGO DA PECA (CODIGO ORIGINAL)','DESCRICAO','QTD','VALOR UNITARIO REGISTRADO','DESC','VALOR']);
     linhasPecas.forEach(p => rows.push([p.codigo, p.desc, p.qtd, p.valorUnit, p.descPct, p.total]));
     rows.push(['TOTAL DE PECAS', '', '', '', '', linhasPecas.reduce((sum, p) => sum + p.total, 0)]);
     const total = linhasPecas.reduce((sum, p) => sum + p.total, 0) + linhasServ.reduce((sum, s) => sum + s.total, 0);
     rows.push(['VALOR DO CONTRATO', '', '', '', '', total]);
-    rows.push([dataExtenso(tenant.cidade || cli.cidade)]);
+    rows.push([dataExtenso(dt.cidade || dc.cidade)]);
 
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Plan1');
-    const fname = `${(veiculo.prefixo || os.id.slice(-6).toUpperCase())}_PLANILHA_DE_CUSTOS.xlsx`;
+    const fname = `${(dv.prefixo || String(os.id || '').slice(-6).toUpperCase() || 'OS')}_PLANILHA_DE_CUSTOS.xlsx`;
     XLSX.writeFile(wb, fname);
     window.toast?.('ExcelJS nao carregou; exportado em modo compatibilidade.', 'warn');
   }

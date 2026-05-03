@@ -314,9 +314,10 @@ window.enviarWppB2C = function(id) {
 
     // Link correto: governo → clienteOficial, demais → cliente
     const isGov = cli?.tipoCliente === 'governo';
-    const link = isGov
-      ? 'https://tsvalencio-ia.github.io/ERP-CODEX2/clienteOficial.html'
-      : 'https://tsvalencio-ia.github.io/ERP-CODEX2/cliente.html';
+    const portalBase = isGov
+      ? 'https://tsvalencio-ia.github.io/ERP-CODEX3/clienteOficial.html'
+      : 'https://tsvalencio-ia.github.io/ERP-CODEX3/cliente.html';
+    const link = `${portalBase}?tenant=${encodeURIComponent(J.tid || '')}`;
 
     const totalFmt = (os.total || 0).toFixed(2).replace('.', ',');
 
@@ -358,6 +359,7 @@ window.prepOS = function(mode, id = null) {
   if ($('osTotalServicosVal')) $('osTotalServicosVal').innerText = '0,00';
   if ($('osTotalPecasVal')) $('osTotalPecasVal').innerText = '0,00';
   if ($('osTotalValMirror')) $('osTotalValMirror').innerText = '0,00';
+  if ($('osSecaoKpisOS')) $('osSecaoKpisOS').innerHTML = '';
   if ($('osTotalHidden')) $('osTotalHidden').value = '0';
   ['osProxRev','osProxKm','osPgtoForma','osPgtoData','osPgtoParcelas','osDescMO','osDescPeca','osEntregueA'].forEach(f => { if ($(f)) $(f).value = ''; });
   if ($('osMediaGrid')) $('osMediaGrid').innerHTML = ''; 
@@ -795,10 +797,28 @@ window.selecionarPecaOS = function(sel) {
   window.calcOSTotal();
 };
 
+window.renderResumoSecoesOS = function(resumoSecoes) {
+    const el = $('osSecaoKpisOS');
+    if (!el) return;
+    const rows = Object.entries(resumoSecoes || {})
+      .filter(([, item]) => item.horas || item.total)
+      .sort((a, b) => b[1].total - a[1].total);
+    if (!rows.length) { el.innerHTML = ''; return; }
+    const moedaLocal = v => 'R$ ' + numBR(v).toFixed(2).replace('.', ',');
+    el.innerHTML = rows.map(([secao, item]) => `
+      <div class="os-secao-kpi">
+        <small>${escOS(secao)}</small>
+        <strong>${moedaLocal(item.total)}</strong>
+        <span>${item.horas.toFixed(2).replace('.', ',')}h em ${item.qtd} servico(s)</span>
+      </div>
+    `).join('');
+};
+
 window.calcOSTotal = function() {
     let total = 0;
     let totalServicos = 0;
     let totalPecas = 0;
+    const resumoSecoesOS = {};
 
     // Desconto: prioriza campo da OS; fallback para padrão do cadastro do cliente
     const ehGov = typeof window._osClienteGovernamental === 'function' && window._osClienteGovernamental();
@@ -820,10 +840,26 @@ window.calcOSTotal = function() {
     document.querySelectorAll('#containerServicosOS > div').forEach(row => {
         const vBruto = numBR(row.querySelector('.serv-valor')?.value || 0);
         const vFinal = +(vBruto * (1 - descMO)).toFixed(2);
+        const tempo = numBR(row.querySelector('.serv-tempo')?.value || 0);
+        const desc = row.querySelector('.serv-desc')?.value?.trim() || '';
         // Atualiza badge de desconto em tempo real
         const descBox = row.querySelector('.serv-desc-val');
         if (descBox) descBox.textContent = 'R$ ' + vFinal.toFixed(2).replace('.', ',');
         totalServicos += vFinal;
+        if (desc || vBruto || tempo) {
+            const sel = row.querySelector('.serv-secao-hora');
+            const sistema = sel?.options?.[sel.selectedIndex]?.text?.replace(/\s+-\s+R\$.*/, '') || row.dataset.secaoHoraLabel || row.dataset.sistemaTabela || '';
+            const categoria = classificarSecaoResumoOS({
+                secaoHoraLabel: sistema,
+                sistemaTabela: row.dataset.sistemaTabela,
+                sistema: row.dataset.sistemaTabela,
+                desc
+            });
+            if (!resumoSecoesOS[categoria]) resumoSecoesOS[categoria] = { horas: 0, total: 0, qtd: 0 };
+            resumoSecoesOS[categoria].horas += tempo;
+            resumoSecoesOS[categoria].total += vFinal;
+            resumoSecoesOS[categoria].qtd += 1;
+        }
     });
 
     document.querySelectorAll('#containerPecasOS > div').forEach(row => {
@@ -843,6 +879,7 @@ window.calcOSTotal = function() {
     if ($('osTotalPecasVal')) $('osTotalPecasVal').innerText = totalPecas.toFixed(2).replace('.', ',');
     if ($('osTotalValMirror')) $('osTotalValMirror').innerText = total.toFixed(2).replace('.', ',');
     if ($('osTotalHidden')) $('osTotalHidden').value = total;
+    window.renderResumoSecoesOS(resumoSecoesOS);
 };
 
 window.verificarStatusOS = function() {
@@ -1664,6 +1701,31 @@ window.gerarPDFOS = async function() {
   const c = J.clientes.find(x => x.id === $v('osCliente')) || {};
   const osAtual = (J.os || []).find(x => x.id === $v('osId')) || {};
   const osId = ($v('osId') || '').slice(-6).toUpperCase() || 'NOVA';
+  const pickPdf = (...values) => {
+    for (const value of values) {
+      if (value === undefined || value === null) continue;
+      if (String(value).trim() !== '') return value;
+    }
+    return '';
+  };
+  const upperPdf = (...values) => String(pickPdf(...values) || '').toUpperCase();
+  const clientePdf = {
+    nome: pickPdf(c.govUnidade, c.razaoSocial, c.nome, osAtual.cliente, $v('osCliente')),
+    doc: pickPdf(c.doc, c.cnpj, c.cpf, osAtual.cpf, $v('osCpf')),
+    telefone: pickPdf(c.wpp, c.telefone, c.celular, osAtual.celular, $v('osCelular')),
+    fiscal: pickPdf(c.govFiscal, c.fiscalContrato, c.fiscal, c.responsavel)
+  };
+  const veiculoPdf = {
+    marca: upperPdf(v.marca, osAtual.marca),
+    modelo: pickPdf(v.modelo, osAtual.veiculo, osAtual.modelo, $v('osVeiculo')),
+    placa: upperPdf(v.placa, osAtual.placa, $v('osPlaca')),
+    ano: pickPdf(v.ano, osAtual.ano),
+    km: pickPdf($v('osKm'), osAtual.km, v.km),
+    chassis: upperPdf(v.chassis, v.chassi, osAtual.chassis, osAtual.chassi),
+    patrimonio: pickPdf(v.patrimonio, v.patrimonioNumero, v.patrimonioId, osAtual.patrimonio, osAtual.patrimonioNumero),
+    prefixo: upperPdf(v.prefixo, osAtual.prefixo)
+  };
+  const oficinaNomePdf = String(pickPdf(J.nomeFantasia, J.tnome, J.razaoSocial, J.nome, 'OFICINA')).toUpperCase();
 
   function linhaTitulo(titulo) {
     if (y > ph - 30) { doc.addPage(); y = 12; }
@@ -1769,7 +1831,7 @@ window.gerarPDFOS = async function() {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
   doc.setTextColor(10, 25, 48);
-  doc.text(String(J.tnome || 'OFICINA').toUpperCase(), margem, 10);
+  doc.text(oficinaNomePdf, margem, 10);
   doc.setFontSize(12);
   doc.text('ORDEM DE SERVICO / LAUDO TECNICO', pw - margem, 10, { align: 'right' });
   y = 22;
@@ -1782,11 +1844,12 @@ window.gerarPDFOS = async function() {
     headStyles: { fillColor: [228, 233, 240], textColor: [0, 0, 0], fontStyle: 'bold' },
     body: [
       ['OS', osId, 'Emissao', hoje],
-      ['Cliente', texto(c.nome || $v('osCliente')), 'CPF/CNPJ', texto(c.doc || $v('osCpf'))],
-      ['Telefone', texto(c.wpp || $v('osCelular')), 'Status', texto($v('osStatus'))],
-      ['Veiculo', texto(v.modelo || $v('osVeiculo')), 'Placa', texto(v.placa || $v('osPlaca'))],
-      ['Ano', texto(v.ano), 'KM', texto($v('osKm') || v.km)],
-      ['Chassi', texto(v.chassis), 'Prefixo/Patrimonio', texto([v.prefixo, v.patrimonio].filter(Boolean).join(' / '))]
+      ['Cliente', texto(clientePdf.nome), 'CPF/CNPJ', texto(clientePdf.doc)],
+      ['Telefone', texto(clientePdf.telefone), 'Status', texto($v('osStatus') || osAtual.status)],
+      ['Veiculo', texto([veiculoPdf.marca, veiculoPdf.modelo].filter(Boolean).join(' ')), 'Placa', texto(veiculoPdf.placa)],
+      ['Ano', texto(veiculoPdf.ano), 'KM', texto(veiculoPdf.km)],
+      ['Chassi', texto(veiculoPdf.chassis), 'Prefixo/Patrimonio', texto([veiculoPdf.prefixo, veiculoPdf.patrimonio].filter(Boolean).join(' / '))],
+      ['Fiscal Contrato', texto(clientePdf.fiscal), '', '']
     ]
   });
   y = doc.lastAutoTable.finalY + 7;
@@ -1910,12 +1973,12 @@ window.gerarPDFOS = async function() {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
   doc.setTextColor(30, 40, 55);
-  doc.text(String(J.tnome || 'OFICINA').toUpperCase(), margem + 35, y + 5, { align: 'center' });
+  doc.text(oficinaNomePdf, margem + 35, y + 5, { align: 'center' });
   doc.text('RESPONSAVEL TECNICO', margem + 35, y + 9, { align: 'center' });
-  doc.text(texto(c.nome || 'CLIENTE'), pw - margem - 35, y + 5, { align: 'center' });
+  doc.text(texto(clientePdf.nome || 'CLIENTE'), pw - margem - 35, y + 5, { align: 'center' });
   doc.text('ASSINATURA DO CLIENTE', pw - margem - 35, y + 9, { align: 'center' });
 
-  doc.save(`Laudo_${v?.placa || $v('osPlaca') || 'OS'}_${Date.now()}.pdf`);
+  doc.save(`Laudo_${veiculoPdf.placa || 'OS'}_${Date.now()}.pdf`);
   window.toast('PDF GERADO', 'ok');
 };
 

@@ -347,6 +347,24 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
       <div class="form-group"><label class="j-label">Cloudinary Cloud Name</label><input class="j-input" id="tCloudName" placeholder="dmuvm1o6m"></div>
       <div class="form-group"><label class="j-label">Cloudinary Upload Preset</label><input class="j-input" id="tCloudPreset" placeholder="evolution"></div>
     </div>
+    <div class="form-group" style="margin-top:12px">
+      <label class="j-label" style="color:var(--cyan)">Firebase exclusivo da oficina (opcional)</label>
+      <div style="font-size:0.68rem;color:var(--muted2);font-family:var(--fm);line-height:1.45;margin:4px 0 10px;">
+        Preencha quando esta oficina tiver projeto Firebase proprio. Se ficar vazio, continua usando o Firebase central atual.
+      </div>
+    </div>
+    <div class="form-row c2">
+      <div class="form-group"><label class="j-label">Firebase apiKey</label><input class="j-input" id="tFbApiKey" placeholder="AIzaSy..."></div>
+      <div class="form-group"><label class="j-label">Firebase authDomain</label><input class="j-input" id="tFbAuthDomain" placeholder="oficina.firebaseapp.com"></div>
+    </div>
+    <div class="form-row c2">
+      <div class="form-group"><label class="j-label">Firebase projectId</label><input class="j-input" id="tFbProjectId" placeholder="oficina-producao"></div>
+      <div class="form-group"><label class="j-label">Firebase storageBucket</label><input class="j-input" id="tFbStorageBucket" placeholder="oficina.firebasestorage.app"></div>
+    </div>
+    <div class="form-row c2">
+      <div class="form-group"><label class="j-label">Firebase messagingSenderId</label><input class="j-input" id="tFbMessagingSenderId" placeholder="123456789"></div>
+      <div class="form-group"><label class="j-label">Firebase appId</label><input class="j-input" id="tFbAppId" placeholder="1:123456789:web:abcdef"></div>
+    </div>
     <div class="form-group">
       <label class="j-label" style="margin-bottom:8px;">Módulos Habilitados</label>
       <div class="mod-checks">
@@ -590,14 +608,29 @@ const CAMPOS_DADOS_OFICINA=[
   'tRazaoSocial','tCnpj','tEndereco','tNumero','tBairro','tCidade','tUf','tCep',
   'tTelefone','tEmail','tResponsavel','tOrcamentista','tRepresentante'
 ];
+const CAMPOS_FIREBASE_OFICINA=[
+  'tFbApiKey','tFbAuthDomain','tFbProjectId','tFbStorageBucket','tFbMessagingSenderId','tFbAppId'
+];
 
 function montarEnderecoOficina(){
   return [$v('tEndereco'),$v('tNumero'),$v('tBairro'),$v('tCidade'),$v('tUf'),$v('tCep')]
     .filter(Boolean).join(', ');
 }
 
+function montarFirebaseOficina(){
+  const cfg={
+    apiKey:$v('tFbApiKey'),
+    authDomain:$v('tFbAuthDomain'),
+    projectId:$v('tFbProjectId'),
+    storageBucket:$v('tFbStorageBucket'),
+    messagingSenderId:$v('tFbMessagingSenderId'),
+    appId:$v('tFbAppId')
+  };
+  return Object.values(cfg).some(Boolean) ? cfg : null;
+}
+
 function prepTenant(mode,id=null){
-  ['tId','tNome','tUser','tSenha','tWpp','tGemini','tCloudName','tCloudPreset',...CAMPOS_DADOS_OFICINA].forEach(f=>{if($(f))$(f).value='';});
+  ['tId','tNome','tUser','tSenha','tWpp','tGemini','tCloudName','tCloudPreset',...CAMPOS_DADOS_OFICINA,...CAMPOS_FIREBASE_OFICINA].forEach(f=>{if($(f))$(f).value='';});
   ['mOS','mCrm','mEst','mFin','mIA','mChat','mAgd','mRH','mComissoes'].forEach(f=>{if($(f))$(f).checked=false;});
   $('tStatus').value='Online'; $('tNicho').value='carros'; $('tPlano').value='trial';
   $('tCloudName').value='dmuvm1o6m'; $('tCloudPreset').value='evolution';
@@ -609,12 +642,12 @@ function prepTenant(mode,id=null){
     $('tId').value=t.id; $('tNome').value=t.nomeFantasia||''; $('tUser').value=t.usuario||'';
     $('tSenha').value=t.senha||''; $('tWpp').value=t.wpp||''; $('tNicho').value=t.nicho||'carros';
     $('tPlano').value=t.plano||'trial'; $('tStatus').value=t.status||'Online';
-    $('tRazaoSocial').value=t.razaoSocial||'';
-    $('tCnpj').value=t.cnpj||'';
-    $('tEndereco').value=t.endereco||'';
-    $('tNumero').value=t.numero||'';
+    $('tRazaoSocial').value=t.razaoSocial||t.razao||'';
+    $('tCnpj').value=t.cnpj||t.doc||t.documento||'';
+    $('tEndereco').value=t.endereco||t.rua||t.logradouro||'';
+    $('tNumero').value=t.numero||t.num||'';
     $('tBairro').value=t.bairro||'';
-    $('tCidade').value=t.cidade||'';
+    $('tCidade').value=t.cidade||t.municipio||'';
     $('tUf').value=t.uf||'';
     $('tCep').value=t.cep||'';
     $('tTelefone').value=t.telefone||t.wpp||'';
@@ -624,6 +657,13 @@ function prepTenant(mode,id=null){
     $('tRepresentante').value=t.representante||t.responsavel||'';
     $('tGemini').value=t.apiKeys?.gemini||''; $('tCloudName').value=t.apiKeys?.cloudName||'dmuvm1o6m';
     $('tCloudPreset').value=t.apiKeys?.cloudPreset||'evolution';
+    const fb=t.firebaseConfig||{};
+    $('tFbApiKey').value=fb.apiKey||'';
+    $('tFbAuthDomain').value=fb.authDomain||'';
+    $('tFbProjectId').value=fb.projectId||'';
+    $('tFbStorageBucket').value=fb.storageBucket||'';
+    $('tFbMessagingSenderId').value=fb.messagingSenderId||'';
+    $('tFbAppId').value=fb.appId||'';
     const m=t.modulos||{};
     $('mOS').checked=!!m.os; $('mCrm').checked=!!m.crm; $('mEst').checked=!!m.estoque;
     $('mFin').checked=!!m.financeiro; $('mIA').checked=!!m.ia; $('mChat').checked=!!m.chat;
@@ -637,18 +677,27 @@ function prepTenant(mode,id=null){
 async function salvarTenant(){
   if(!$v('tNome')||!$v('tUser')||!$v('tSenha')){toast('⚠ Preencha nome, usuário e senha','warn');return;}
   const geminiKey=$v('tGemini');
+  const firebaseConfig=montarFirebaseOficina();
   const payload={
     nomeFantasia:$v('tNome'), usuario:$v('tUser'), senha:$v('tSenha'),
     wpp:$v('tWpp'), nicho:$v('tNicho'), plano:$v('tPlano'), status:$v('tStatus'),
     razaoSocial:$v('tRazaoSocial'),
+    razao:$v('tRazaoSocial'),
     cnpj:$v('tCnpj'),
+    doc:$v('tCnpj'),
+    documento:$v('tCnpj'),
     endereco:$v('tEndereco'),
+    rua:$v('tEndereco'),
+    logradouro:$v('tEndereco'),
     numero:$v('tNumero'),
+    num:$v('tNumero'),
     bairro:$v('tBairro'),
     cidade:$v('tCidade'),
+    municipio:$v('tCidade'),
     uf:$v('tUf').toUpperCase(),
     cep:$v('tCep'),
     telefone:$v('tTelefone')||$v('tWpp'),
+    celular:$v('tTelefone')||$v('tWpp'),
     email:$v('tEmail'),
     responsavel:$v('tResponsavel'),
     orcamentista:$v('tOrcamentista'),
@@ -659,6 +708,7 @@ async function salvarTenant(){
       cloudName:$v('tCloudName')||'dmuvm1o6m',
       cloudPreset:$v('tCloudPreset')||'evolution'
     },
+    firebaseConfig,
     modulos:{
       os:$('mOS').checked, crm:$('mCrm').checked, estoque:$('mEst').checked,
       financeiro:$('mFin').checked, ia:$('mIA').checked, chat:$('mChat').checked,

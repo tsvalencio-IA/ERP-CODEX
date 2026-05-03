@@ -121,12 +121,12 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .mec-kpi.c2 .mec-kpi-val{color:var(--warn);}
 
 /* KANBAN */
-.kanban-wrap{display:flex;gap:12px;overflow-x:auto;padding-bottom:8px;align-items:flex-start;}
-.k-col{background:var(--surf2);border:1px solid var(--border);border-radius:3px;min-width:260px;width:260px;display:flex;flex-direction:column;max-height:calc(100vh - 200px);}
+.kanban-wrap{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:10px;overflow-x:hidden;padding-bottom:8px;align-items:flex-start;}
+.k-col{background:var(--surf2);border:1px solid var(--border);border-radius:3px;min-width:0;width:auto;display:flex;flex-direction:column;max-height:calc(100vh - 220px);min-height:126px;}
 .k-col-head{padding:11px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
 .k-col-label{font-family:var(--fd);font-size:0.82rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;}
 .k-col-count{font-family:var(--fm);font-size:0.62rem;color:var(--muted);padding:2px 7px;border:1px solid var(--border);border-radius:10px;}
-.k-col-body{overflow-y:auto;padding:8px;flex:1;display:flex;flex-direction:column;gap:7px;}
+.k-col-body{overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:7px;min-height:76px;max-height:calc(100vh - 286px);}
 .k-card{background:var(--surf3);border:1px solid var(--border);border-left:3px solid;border-radius:3px;padding:11px;cursor:pointer;transition:all 0.15s;}
 .k-card:hover{border-color:var(--border2);transform:translateY(-1px);}
 .k-placa{font-family:var(--fm);font-size:0.9rem;font-weight:700;letter-spacing:2px;margin-bottom:3px;}
@@ -241,7 +241,9 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
   .mec-kpis{grid-template-columns:1fr;}
   .form-row.c2,.form-row.c3{grid-template-columns:1fr;}
   .kanban-wrap{flex-direction:column;}
+  .kanban-wrap{display:flex;overflow-x:hidden;}
   .k-col{min-width:100%;width:100%;max-height:none;}
+  .k-col-body{max-height:none;min-height:86px;}
   .topbar{padding:10px 14px;}
   .topbar-info{display:none;}
   .content{padding:14px;}
@@ -661,12 +663,26 @@ const J = {
   cloudName: sessionStorage.getItem('j_cloud_name')||'dmuvm1o6m',
   cloudPreset: sessionStorage.getItem('j_cloud_preset')||'evolution'
 };
- if(!J.tid || J.role==='admin') window.location.replace('index.html');
+ if(!J.tid || String(J.role||'').toLowerCase()==='admin') window.location.replace('index.html');
 
 // FIREBASE
-const FB={apiKey:"AIzaSyBqIuCsHHuy_f-mBWV4JBkbyOorXpqQvqg",authDomain:"hub-thiaguinho.firebaseapp.com",projectId:"hub-thiaguinho",storageBucket:"hub-thiaguinho.firebasestorage.app",messagingSenderId:"453508098543",appId:"1:453508098543:web:305f4d48edd9be40bd6e1a"};
-if(!firebase.apps.length) firebase.initializeApp(FB);
-const db = firebase.firestore();
+const FB_BASE={apiKey:"AIzaSyBqIuCsHHuy_f-mBWV4JBkbyOorXpqQvqg",authDomain:"hub-thiaguinho.firebaseapp.com",projectId:"hub-thiaguinho",storageBucket:"hub-thiaguinho.firebasestorage.app",messagingSenderId:"453508098543",appId:"1:453508098543:web:305f4d48edd9be40bd6e1a"};
+function _firebaseEquipeConfig(){
+  try{
+    const cfg=JSON.parse(sessionStorage.getItem('j_firebase_config')||'null');
+    if(cfg&&cfg.apiKey&&cfg.projectId) return cfg;
+  }catch(e){}
+  return FB_BASE;
+}
+const FB=_firebaseEquipeConfig();
+const appName=(FB.projectId&&FB.projectId!==FB_BASE.projectId)?('tenant-'+String(FB.projectId).replace(/[^a-z0-9-]/gi,'-')):undefined;
+let fbApp;
+if(appName){
+  fbApp=firebase.apps.find(a=>a.name===appName)||firebase.initializeApp(FB,appName);
+}else{
+  fbApp=firebase.apps[0]||firebase.initializeApp(FB);
+}
+const db = fbApp.firestore();
 
 // STATE
 let dbOS=[], dbClientes=[], dbVeiculos=[], dbEstoque=[], dbMsgs=[];
@@ -708,6 +724,12 @@ function irTab(id,el){
 
 const dtBr = iso=>iso?new Date(iso).toLocaleDateString('pt-BR'):'-';
 const dtHrBr = iso=>iso?new Date(iso).toLocaleString('pt-BR'):'-';
+function moeda(v){
+  const n = typeof v === 'number'
+    ? v
+    : (parseFloat(String(v || 0).replace(/\./g, '').replace(',', '.')) || 0);
+  return 'R$ ' + n.toFixed(2).replace('.', ',');
+}
 
 // ═══════════════════════════════════════════════════════════════
 // STT - SPEECH TO TEXT (reconhecimento de voz)
@@ -1505,10 +1527,9 @@ function renderKanban(){
     if (st === 'cancelado') return false;
     
     // Se for gerente, vendedor ou admin, vê TODO o pátio.
-    if (['gerente', 'vendedor', 'admin'].includes(J.role)) return true;
+    if (['gerente', 'vendedor', 'admin'].includes(String(J.role||'').toLowerCase())) return true;
     
-    // Se for mecânico, só vê as OS sem dono ou as que são dele.
-    if (o.mecId && o.mecId !== J.fid) return false;
+    // Visibilidade do kanban: mecanico ve todo o patio; KPI/comissao seguem filtrados por J.fid.
     
     return true;
   });
@@ -1521,7 +1542,7 @@ function renderKanban(){
     if(cols[st]){ cols[st].push({os:o,v,c}); cnts[st]++; }
   });
 
-  const corMap={Aguardando:'var(--muted2)',Orcamento:'var(--warn)',Aprovado:'var(--cyan)',Andamento:'#FF8C00',Concluido:'var(--success)'};
+  const corMap={Aguardando:'var(--muted2)',Orcamento:'var(--warn)',Aprovado:'var(--cyan)',Andamento:'#FF8C00',Pronto:'var(--success)',Entregue:'#00FF88',Concluido:'var(--success)'};
   statuses.forEach(s=>{
     const cEl=$('cnt-'+s); if(cEl) cEl.innerText=cnts[s];
     const kEl=$('kb-'+s); if(!kEl) return;

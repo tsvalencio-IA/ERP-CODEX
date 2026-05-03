@@ -218,6 +218,11 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .os-total-card{background:rgba(0,212,255,.06);border:1px solid rgba(0,212,255,.18);border-radius:4px;padding:10px 12px;}
 .os-total-card small{display:block;font-family:var(--fm);font-size:.65rem;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);margin-bottom:5px;}
 .os-total-card strong{font-family:var(--fd);font-size:1.25rem;color:var(--success);}
+.os-secao-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:10px 0 2px;}
+.os-secao-kpi{background:rgba(0,255,136,.045);border:1px solid rgba(0,255,136,.14);border-radius:4px;padding:9px 10px;min-width:0;}
+.os-secao-kpi small{display:block;font-family:var(--fm);font-size:.56rem;letter-spacing:.7px;color:var(--muted);text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.os-secao-kpi strong{display:block;font-family:var(--fd);font-size:1rem;color:var(--success);margin-top:4px;}
+.os-secao-kpi span{display:block;font-family:var(--fm);font-size:.62rem;color:var(--muted2);margin-top:2px;}
 .tempa-inline-box{grid-column:1/-1;background:rgba(0,0,0,.22);border:1px solid rgba(0,212,255,.22);border-radius:4px;padding:8px;margin-top:4px;box-shadow:0 10px 22px rgba(0,0,0,.28);max-height:320px;overflow-y:auto;}
 .tempa-inline-option{width:100%;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;text-align:left;background:rgba(0,212,255,.05);border:1px solid rgba(0,212,255,.16);border-radius:3px;color:var(--text);padding:8px;margin-bottom:6px;cursor:pointer;}
 .tempa-inline-option:hover{border-color:var(--cyan);background:rgba(0,212,255,.1);}
@@ -563,6 +568,7 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
         <div class="user-name" id="sbUserNome">Carregando</div>
         <div class="user-role" id="sbUserRole">ADMIN</div>
       </div>
+      <div id="osSecaoKpisOS" class="os-secao-kpis"></div>
     </div>
     <button class="btn-sair" onclick="sair()">⏻ ENCERRAR SESSÃO</button>
   </div>
@@ -2017,9 +2023,9 @@ window.prepCliente = function(mode, id=null) {
     const c=J.clientes.find(x=>x.id===id); if(!c) return;
     $('cliId').value=c.id; $('cliNome').value=c.nome||''; $('cliWpp').value=c.wpp||'';
     $('cliDoc').value=c.doc||''; $('cliEmail').value=c.email||'';
-    $('cliCep').value=c.cep||''; $('cliRua').value=c.rua||''; 
-    $('cliNum').value=c.num||''; $('cliBairro').value=c.bairro||''; 
-    $('cliCidade').value=c.cidade||'';
+    $('cliCep').value=c.cep||''; $('cliRua').value=c.rua||c.endereco||c.logradouro||''; 
+    $('cliNum').value=c.num||c.numero||''; $('cliBairro').value=c.bairro||''; 
+    $('cliCidade').value=c.cidade||c.municipio||'';
     $('cliLogin').value=c.login||''; $('cliPin').value=c.pin||'';
     // Tipo + campos governo
     if (c.tipoCliente === 'governo') {
@@ -2063,14 +2069,18 @@ window.salvarCliente = async function() {
     nome:     $v('cliNome'),
     wpp:      $v('cliWpp'),
     doc:      $v('cliDoc'),
+    docLimpo: String($v('cliDoc') || '').replace(/\D/g, ''),
     email:    $v('cliEmail'),
     login:    login,
     pin:      pin,
     cep:      $v('cliCep'),
     rua:      $v('cliRua'),
     num:      $v('cliNum'),
+    numero:   $v('cliNum'),
     bairro:   $v('cliBairro'),
     cidade:   $v('cliCidade'),
+    municipio:$v('cliCidade'),
+    enderecoCompleto: [$v('cliRua'), $v('cliNum'), $v('cliBairro'), $v('cliCidade')].filter(Boolean).join(', '),
     tipoCliente: (document.getElementById('cliTipoGov')?.checked ? 'governo' : 'b2c'),
     updatedAt: new Date().toISOString()
   };
@@ -2132,9 +2142,10 @@ window._wppAcessoCliente = function(cid) {
   const fone = c.wpp.replace(/\D/g, '');
   // Link correto: governo → clienteOficial, demais → cliente
   const isGov = c.tipoCliente === 'governo';
-  const link = isGov
+  const portalBase = isGov
     ? 'https://tsvalencio-ia.github.io/ERP-CODEX3/clienteOficial.html'
     : 'https://tsvalencio-ia.github.io/ERP-CODEX3/cliente.html';
+  const link = `${portalBase}?tenant=${encodeURIComponent(J.tid || '')}`;
   const msg =
     `Olá ${c.nome.split(' ')[0]}! 👋\n\n` +
     `Aqui é a *${J.tnome}*. Seu acesso ao portal do cliente S.O.S Valêncio está pronto!\n\n` +
@@ -2287,8 +2298,8 @@ window.prepVeiculo = function(mode, id=null) {
     $('veicDono').value=v.clienteId||''; $('veicPlaca').value=v.placa||'';
     $('veicModelo').value=v.modelo||''; $('veicAno').value=v.ano||'';
     $('veicCor').value=v.cor||''; $('veicKm').value=v.km||''; $('veicObs').value=v.obs||'';
-    if($('veicChassis')) $('veicChassis').value = v.chassis || '';
-    if($('veicPatrimonio')) $('veicPatrimonio').value = v.patrimonio || '';
+    if($('veicChassis')) $('veicChassis').value = v.chassis || v.chassi || '';
+    if($('veicPatrimonio')) $('veicPatrimonio').value = v.patrimonio || v.patrimonioNumero || v.patrimonioId || '';
     if($('veicPrefixo')) $('veicPrefixo').value = v.prefixo || '';
     if($('veicMarca')) $('veicMarca').value = v.marca || '';
   }
@@ -2300,7 +2311,9 @@ window.salvarVeiculo = async function() {
     placa: $v('veicPlaca').toUpperCase(), modelo: $v('veicModelo'),
     ano: $v('veicAno'), cor: $v('veicCor'), km: $v('veicKm'), obs: $v('veicObs'),
     chassis: ($v('veicChassis') || '').toUpperCase(),
+    chassi: ($v('veicChassis') || '').toUpperCase(),
     patrimonio: $v('veicPatrimonio') || '',
+    patrimonioNumero: $v('veicPatrimonio') || '',
     prefixo: $v('veicPrefixo') || '',
     marca: ($v('veicMarca') || '').toUpperCase(),
     updatedAt: new Date().toISOString()

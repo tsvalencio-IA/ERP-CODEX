@@ -320,14 +320,25 @@ body{background:var(--bg0);color:var(--text);font-family:var(--ff);min-height:10
 <script src="js/os-utils.js"></script>
 <script>
 'use strict';
-const db = window.initFirebase();
+const portalParams = new URLSearchParams(window.location.search);
+const _tenantSlug = portalParams.get('tenant') || portalParams.get('t') || null;
+if (!_tenantSlug) sessionStorage.removeItem('j_firebase_config');
+let db = window.initFirebase();
 let CLI = null, TID = null;
 let _OS = [], _VEIC = [], _FIN = [], _OFIC = null;
 const fmt = new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
+const _tenantReady = _tenantSlug ? _prepararTenantPortal(_tenantSlug) : Promise.resolve();
 
 function moeda(v){ return fmt.format(parseFloat(v||0)); }
 function fmtDt(d){ if(!d) return '—'; try{ return new Date(d).toLocaleDateString('pt-BR'); }catch{ return '—'; } }
 function esc(s){ return String(s==null?'':s).replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c])); }
+function _pick(...values){
+  for(const value of values){
+    if(value===undefined||value===null) continue;
+    if(String(value).trim()!=='') return value;
+  }
+  return '';
+}
 function nBR(v){
   if(typeof v === 'number' && isFinite(v)) return v;
   const s=String(v==null?'':v).replace(/\s/g,'').replace(/R\$/gi,'');
@@ -380,27 +391,37 @@ function _classificarSecaoKPI(serv){
   if(/\b(mecanica|motor|cambio|transmissao|arrefecimento|suspensao|freio|direcao|retifica)\b/.test(t)) return 'Mecanica';
   return base ? base.slice(0,48) : 'Outros servicos';
 }
-function _resumoSecoesPeriodo(){
+function _resumoSecoesOS(os){
   const UOS=window.JOS||window.JarvisOSUtils||{};
   const out={};
-  _OS.filter(_osDentroPeriodo).forEach(os=>{
-    const hasApproval=UOS.hasApproval?UOS.hasApproval(os):false;
-    const keys=hasApproval&&UOS.getApprovedKeys?UOS.getApprovedKeys(os):new Set();
-    const descMOraw=os.descMO!=null?nBR(os.descMO):nBR(CLI?.govDescMO||0);
-    const descMO=descMOraw>1?descMOraw/100:descMOraw;
-    (os.servicos||[]).forEach((s,idx)=>{
-      if(hasApproval&&!keys.has('servico-'+idx)) return;
-      const tempo=nBR(s.tempo||0);
-      const valorBruto=nBR(s.valor||0)||(tempo*nBR(s.valorHora||s.valorHoraSecao||0));
-      if(!tempo&&!valorBruto&&!s.desc) return;
-      const secao=_classificarSecaoKPI(s);
-      if(!out[secao]) out[secao]={horas:0,total:0,qtd:0};
-      out[secao].horas+=tempo;
-      out[secao].total+=+(valorBruto*(1-descMO)).toFixed(2);
-      out[secao].qtd+=1;
-    });
+  if(!os) return [];
+  const hasApproval=UOS.hasApproval?UOS.hasApproval(os):false;
+  const keys=hasApproval&&UOS.getApprovedKeys?UOS.getApprovedKeys(os):new Set();
+  const descMOraw=os.descMO!=null?nBR(os.descMO):nBR(CLI?.govDescMO||0);
+  const descMO=descMOraw>1?descMOraw/100:descMOraw;
+  (os.servicos||[]).forEach((s,idx)=>{
+    if(hasApproval&&!keys.has('servico-'+idx)) return;
+    const tempo=nBR(s.tempo||0);
+    const valorHora=nBR(s.valorHora||s.valorHoraSecao||0);
+    const valorBruto=nBR(s.valor||0)||(tempo*valorHora);
+    if(!tempo&&!valorBruto&&!s.desc) return;
+    const secao=_classificarSecaoKPI(s);
+    if(!out[secao]) out[secao]={horas:0,total:0,qtd:0};
+    out[secao].horas+=tempo;
+    out[secao].total+=+(valorBruto*(1-descMO)).toFixed(2);
+    out[secao].qtd+=1;
   });
   return Object.entries(out).sort((a,b)=>b[1].total-a[1].total);
+}
+function _resumoSecoesPeriodo(){ return []; }
+function _kpisSecaoOSHtml(os){
+  const rows=_resumoSecoesOS(os);
+  if(!rows.length) return '';
+  return `<div class="secao-kpis" style="margin:0 0 16px">${rows.map(([secao,item])=>`<div class="secao-kpi">
+    <div class="secao-kpi-lbl">${esc(secao)}</div>
+    <div class="secao-kpi-val">${moeda(item.total)}</div>
+    <div class="secao-kpi-meta">${item.horas.toFixed(2).replace('.',',')}h por ${item.qtd} servico(s)</div>
+  </div>`).join('')}</div>`;
 }
 function _renderKpisSecao(){
   const el=document.getElementById('secaoKpis');
@@ -434,6 +455,7 @@ document.getElementById('pinInput').addEventListener('keydown',e=>{ if(e.key==='
 document.getElementById('loginInput').addEventListener('keydown',e=>{ if(e.key==='Enter') document.getElementById('pinInput').focus(); });
 
 async function doLogin(){
+  await _tenantReady;
   const err=document.getElementById('loginErr');
   err.style.display='none';
   const login=(document.getElementById('loginInput').value||'').trim();
@@ -463,8 +485,22 @@ async function doLogin(){
 
 async function _carregarOficina(){
   try{
-    const snap=await db.collection('oficinas').doc(TID).get();
+    const snap=await (window.initCentralFirebase?window.initCentralFirebase():db).collection('oficinas').doc(TID).get();
     if(snap.exists) _OFIC=snap.data();
+  }catch(e){}
+}
+
+async function _prepararTenantPortal(tenantId){
+  try{
+    const centralDb=window.initCentralFirebase?window.initCentralFirebase():db;
+    const snap=await centralDb.collection('oficinas').doc(tenantId).get();
+    if(!snap.exists) return;
+    _OFIC=snap.data();
+    TID=tenantId;
+    if(_OFIC.firebaseConfig?.projectId&&_OFIC.firebaseConfig?.apiKey){
+      sessionStorage.setItem('j_firebase_config',JSON.stringify(_OFIC.firebaseConfig));
+      db=window.initFirebase();
+    }
   }catch(e){}
 }
 
@@ -483,7 +519,7 @@ function _ligarListeners(){
     _VEIC=snap.docs.map(d=>({id:d.id,...d.data()}));
     _renderViaturas();
     const el=document.getElementById('agdVeiculo');
-    if(el) el.innerHTML='<option value="">Selecione a viatura...</option>'+_VEIC.map(v=>`<option value="${v.id}">${(v.prefixo||'').toUpperCase()||v.placa} — ${v.modelo||''}</option>`).join('');
+    if(el) el.innerHTML='<option value="">Selecione a viatura...</option>'+_VEIC.map(v=>`<option value="${v.id}">${String(_pick(v.prefixo,v.placa)||'').toUpperCase()} — ${_pick(v.modelo)}</option>`).join('');
   });
 
   // OS
@@ -557,6 +593,12 @@ function _buildOSCard(os){
   const placaBruta=(os.placa||v.placa||'S/PLACA').toUpperCase().replace(/[^A-Z0-9]/g,'');
   const placa=placaBruta.length===7?`${placaBruta.slice(0,3)}-${placaBruta.slice(3)}`:placaBruta;
   const km=os.km?Number(os.km).toLocaleString('pt-BR'):(v.km?Number(v.km).toLocaleString('pt-BR'):'--');
+  const marcaVeic=_pick(v.marca,os.marca);
+  const modeloVeic=_pick(v.modelo,os.veiculo,os.modelo);
+  const anoVeic=_pick(v.ano,os.ano);
+  const prefixoVeic=String(_pick(v.prefixo,os.prefixo)||'').toUpperCase();
+  const chassisVeic=String(_pick(v.chassis,v.chassi,os.chassis,os.chassi)||'').toUpperCase();
+  const patrimonioVeic=_pick(v.patrimonio,v.patrimonioNumero,v.patrimonioId,os.patrimonio,os.patrimonioNumero);
   const resumoFin=_resumoFinanceiroOS(os);
   const vencsTxt=resumoFin.vencs.map(v=>fmtDt(v)).join(' | ');
   const resumoFinHtml=`<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0;">
@@ -604,8 +646,10 @@ function _buildOSCard(os){
   // Detalhes — aplica desconto do batalhão (govDescMO / govDescPeca) sobre valores brutos
   const UOS = window.JOS || window.JarvisOSUtils || {};
   const parseBR = UOS.parseNumberBR || (v => parseFloat(String(v || 0).replace(',', '.')) || 0);
-  const pctDescMO   = parseBR(CLI.govDescMO   || 0);
-  const pctDescPeca = parseBR(CLI.govDescPeca || 0);
+  const pctDescMOBase = os.descMO!=null ? parseBR(os.descMO) : parseBR(CLI.govDescMO || 0);
+  const pctDescPecaBase = os.descPeca!=null ? parseBR(os.descPeca) : parseBR(CLI.govDescPeca || 0);
+  const pctDescMO = pctDescMOBase > 1 ? pctDescMOBase / 100 : pctDescMOBase;
+  const pctDescPeca = pctDescPecaBase > 1 ? pctDescPecaBase / 100 : pctDescPecaBase;
   const temAprovacao = UOS.hasApproval ? UOS.hasApproval(os) : false;
   const chavesAprovadas = UOS.getApprovedKeys ? UOS.getApprovedKeys(os) : new Set();
   const badgeAprovacao = key => temAprovacao
@@ -663,10 +707,10 @@ function _buildOSCard(os){
 
   const detalhes=`<div class="os-details">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,.05)">
-      <div><div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:2px">VEÍCULO</div><div style="font-weight:700">${esc(v.marca||'')} ${esc(v.modelo||'')}</div></div>
-      <div><div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:2px">ANO / PREFIXO</div><div style="font-weight:700">${esc(v.ano||'—')} / ${esc((v.prefixo||'').toUpperCase()||'—')}</div></div>
-      <div><div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:2px">CHASSIS</div><div style="font-family:var(--mono);font-size:.75rem">${esc(v.chassis||'—')}</div></div>
-      <div><div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:2px">PATRIMÔNIO</div><div style="font-family:var(--mono);font-size:.75rem">${esc(v.patrimonio||'—')}</div></div>
+      <div><div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:2px">VEÍCULO</div><div style="font-weight:700">${esc(marcaVeic)} ${esc(modeloVeic)}</div></div>
+      <div><div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:2px">ANO / PREFIXO</div><div style="font-weight:700">${esc(anoVeic||'—')} / ${esc(prefixoVeic||'—')}</div></div>
+      <div><div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:2px">CHASSIS</div><div style="font-family:var(--mono);font-size:.75rem">${esc(chassisVeic||'—')}</div></div>
+      <div><div style="font-family:var(--mono);font-size:.63rem;color:var(--muted);margin-bottom:2px">PATRIMÔNIO</div><div style="font-family:var(--mono);font-size:.75rem">${esc(patrimonioVeic||'—')}</div></div>
     </div>
 
     ${os.diagnostico||os.relato?`<div style="margin-bottom:16px">
@@ -675,6 +719,7 @@ function _buildOSCard(os){
     </div>`:''}
 
     ${resumoFinHtml}
+    ${_kpisSecaoOSHtml(os)}
 
     ${lsServ?`<div style="margin-bottom:16px">
       <div style="font-family:var(--mono);font-size:.63rem;color:var(--brand);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">MÃO DE OBRA (${totalTMO.toFixed(2).replace('.',',')}h)${pctDescMO>0?` · Desc. contrato: ${(pctDescMO*100).toFixed(0)}%`:''}</div>
@@ -701,7 +746,7 @@ function _buildOSCard(os){
     <div class="os-header">
       <div>
         <div class="placa-box"><div class="placa-top">BRASIL</div><div class="placa-txt">${esc(placa)}</div></div>
-        <div style="margin-top:8px;font-size:.72rem;color:var(--muted)">${esc(v.modelo||os.veiculo||'')}</div>
+        <div style="margin-top:8px;font-size:.72rem;color:var(--muted)">${esc(modeloVeic)}</div>
         <div style="font-family:var(--mono);font-size:.6rem;color:var(--disabled);margin-top:2px">OS #${os.id.slice(-6).toUpperCase()}</div>
       </div>
       <div style="text-align:right">
@@ -721,10 +766,10 @@ function _renderViaturas(){
   const tb=document.getElementById('tbViat');
   if(!_VEIC.length){ tb.innerHTML='<tr><td colspan="5" class="empty">Nenhuma viatura cadastrada.</td></tr>'; return; }
   tb.innerHTML=_VEIC.map(v=>`<tr>
-    <td><strong>${esc((v.prefixo||'').toUpperCase())||'—'}</strong></td>
-    <td>${esc(v.marca||'')} ${esc(v.modelo||'')}<br><small style="color:var(--muted)">Ano ${esc(v.ano||'—')}</small></td>
+    <td><strong>${esc(String(_pick(v.prefixo,v.placa)||'').toUpperCase())||'—'}</strong></td>
+    <td>${esc(_pick(v.marca))} ${esc(_pick(v.modelo))}<br><small style="color:var(--muted)">Ano ${esc(_pick(v.ano)||'—')}</small></td>
     <td style="font-family:var(--mono);font-weight:700">${esc((v.placa||'').toUpperCase())}</td>
-    <td style="font-family:var(--mono)">${esc(v.patrimonio||'—')}</td>
+    <td style="font-family:var(--mono)">${esc(_pick(v.patrimonio,v.patrimonioNumero,v.patrimonioId)||'—')}</td>
     <td style="font-family:var(--mono)">${esc(v.km||'—')}</td>
   </tr>`).join('');
 }
@@ -739,7 +784,7 @@ function _renderHist(){
     const resumo=_resumoFinanceiroOS(o);
     return `<tr>
       <td><strong>#${o.id.slice(-6).toUpperCase()}</strong></td>
-      <td>${esc((v.prefixo||v.placa||'').toUpperCase())}<br><small style="color:var(--muted)">${esc(v.modelo||'')}</small></td>
+      <td>${esc(String(_pick(v.prefixo,v.placa,o.placa)||'').toUpperCase())}<br><small style="color:var(--muted)">${esc(_pick(v.modelo,o.veiculo,o.modelo))}</small></td>
       <td>${fmtDt(o.updatedAt||o.data)}</td>
       <td style="text-align:right;font-family:var(--mono);font-weight:700;color:var(--ok)">${moeda(resumo.faturado||resumo.aprovado||resumo.orcamento)}</td>
       <td><button onclick="abrirHistOS('${o.id}')" style="background:var(--gov-dim);border:1px solid var(--border-s);color:var(--gov);padding:6px 12px;border-radius:var(--r);font-family:var(--mono);font-size:.65rem;cursor:pointer;white-space:nowrap">▶ VER</button></td>
@@ -945,19 +990,21 @@ function trocarTab(id,btn){
 
 // ── SAIR ──────────────────────────────────────────────────────
 function sair(){
-  sessionStorage.removeItem('govCli'); sessionStorage.removeItem('govTid');
+  sessionStorage.removeItem('govCli'); sessionStorage.removeItem('govTid'); sessionStorage.removeItem('j_firebase_config');
   location.reload();
 }
 
 // ── AUTO-LOGIN ────────────────────────────────────────────────
 (function(){
-  const cached=sessionStorage.getItem('govCli');
-  if(cached){
-    try{
-      CLI=JSON.parse(cached); TID=sessionStorage.getItem('govTid');
-      _carregarOficina().then(inicializar);
-    }catch(e){}
-  }
+  _tenantReady.then(()=>{
+    const cached=sessionStorage.getItem('govCli');
+    if(cached){
+      try{
+        CLI=JSON.parse(cached); TID=sessionStorage.getItem('govTid')||TID;
+        _carregarOficina().then(inicializar);
+      }catch(e){}
+    }
+  });
 })();
 </script>
 </body>

@@ -227,6 +227,7 @@ function _dadosOficinaSessao(d) {
     representante: d.representante || d.responsavel || '',
     orcamentista: d.orcamentista || '',
     nicho: d.nicho || 'carros',
+    firebaseConfig: d.firebaseConfig || null,
     apiKeys: d.apiKeys || {}
   };
 }
@@ -291,6 +292,9 @@ async function autenticar() {
         j_cloud_preset: d.apiKeys?.cloudPreset || 'evolution',
       };
       sessao.j_oficina = JSON.stringify(_dadosOficinaSessao(d));
+      if (d.firebaseConfig?.projectId && d.firebaseConfig?.apiKey) {
+        sessao.j_firebase_config = JSON.stringify(d.firebaseConfig);
+      }
 
       const brand = {
         name:       d.brandName    || d.nomeFantasia,
@@ -336,6 +340,9 @@ async function autenticar() {
         j_cloud_preset: maeData.apiKeys?.cloudPreset || 'evolution',
       };
       sessao.j_oficina = JSON.stringify(_dadosOficinaSessao(maeData));
+      if (maeData.firebaseConfig?.projectId && maeData.firebaseConfig?.apiKey) {
+        sessao.j_firebase_config = JSON.stringify(maeData.firebaseConfig);
+      }
 
       const brand = {
         name:       maeData.brandName    || maeData.nomeFantasia,

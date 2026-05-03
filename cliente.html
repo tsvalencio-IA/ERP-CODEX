@@ -350,7 +350,10 @@ body { overflow-y: auto; background: #060A14; color: #E8F4FF; font-family: 'Exo 
 // CORE LÓGICA E FIREBASE
 // Powered by thIAguinho Soluções Digitais
 // ============================================================
-const db = window.initFirebase();
+const params = new URLSearchParams(window.location.search);
+const _tenantSlug = params.get('tenant') || params.get('t') || null;
+if (!_tenantSlug) sessionStorage.removeItem('j_firebase_config');
+let db = window.initFirebase();
 let P = { clienteId: null, tenantId: null, cliente: null, oficina: null, veiculos: [], financeiro: [] };
 const formatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -369,19 +372,22 @@ function switchCliTab(tabId, btnEl) {
   if(tabId === 'tabChat') { const msgsContainer = document.getElementById('renderChatArea'); if(msgsContainer) msgsContainer.scrollTop = msgsContainer.scrollHeight; }
 }
 
-const params = new URLSearchParams(window.location.search);
-const _tenantSlug = params.get('tenant') || params.get('t') || null;
-if (_tenantSlug) _carregarBrandTenant(_tenantSlug);
+const _tenantReady = _tenantSlug ? _carregarBrandTenant(_tenantSlug) : Promise.resolve();
 
 async function _carregarBrandTenant(tenantId) {
   try {
-    const snap = await db.collection('oficinas').doc(tenantId).get();
+    const centralDb = window.initCentralFirebase ? window.initCentralFirebase() : db;
+    const snap = await centralDb.collection('oficinas').doc(tenantId).get();
     if (!snap.exists) return;
     const d = snap.data();
     document.getElementById('portalOficinaName').textContent = d.nomeFantasia || 'Portal do Cliente';
     const logoL = (d.nomeFantasia||'J').charAt(0).toUpperCase();
     document.getElementById('portalLogoMark').textContent = logoL; document.getElementById('portalHdrMark').textContent  = logoL; document.getElementById('portalHdrName').textContent  = d.nomeFantasia || 'Oficina Parceira';
     P.tenantId = tenantId; P.oficina  = d;
+    if (d.firebaseConfig?.projectId && d.firebaseConfig?.apiKey) {
+      sessionStorage.setItem('j_firebase_config', JSON.stringify(d.firebaseConfig));
+      db = window.initFirebase();
+    }
   } catch(e) {}
 }
 
@@ -389,6 +395,7 @@ document.getElementById('pPin').addEventListener('keydown', e => { if (e.key ===
 document.getElementById('pLogin').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('pPin').focus(); });
 
 async function portalLogin() {
+  await _tenantReady;
   const rawLogin = document.getElementById('pLogin').value.trim().toLowerCase();
   const pin   = document.getElementById('pPin').value.trim();
   const err   = document.getElementById('portalLoginErr');
@@ -447,6 +454,7 @@ async function portalLogin() {
 }
 
 function portalLogout() {
+  sessionStorage.removeItem('j_firebase_config');
   P = { clienteId: null, tenantId: null, cliente: null, oficina: null, veiculos: [] };
   document.getElementById('loginView').style.display  = 'block'; document.getElementById('portalView').style.display = 'none';
   document.getElementById('pLogin').value = ''; document.getElementById('pPin').value   = '';

@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>J.A.R.V.I.S — Painel da Equipe</title>
+<title>JARVIS ERP — Painel da Equipe</title>
 <!-- ═══ PWA ═══ -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#00D4FF">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="JARVIS Mecânico">
+<meta name="apple-mobile-web-app-title" content="t.h.I.A.g.u.i.n.h.o. Mecânico">
 <meta name="mobile-web-app-capable" content="yes">
 <script>
 if ('serviceWorker' in navigator) {
@@ -1530,11 +1530,19 @@ function renderKanban(){
     kEl.innerHTML=cols[s].sort((a,b)=>new Date(b.os.updatedAt||0)-new Date(a.os.updatedAt||0)).map(({os,v,c})=>{
       const qm = STATUS_NEXT[s];
       const qmBtn = qm ? `<button class="k-move-btn" onclick="quickMoveOS('${os.id}','${qm.next}',event)">${qm.label}</button>` : '';
+      const UOS = window.JarvisOSUtils || window.JOS || {};
+      const resumo = UOS.getBudgetSummary ? UOS.getBudgetSummary(os, c, J.financeiro) : {orcamento:os.total||0, aprovado:os.totalAprovado||0, faturado:0};
+      const valores = `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin:8px 0;">
+        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);padding:5px;border-radius:3px;"><small style="display:block;font-family:var(--fm);font-size:.47rem;color:var(--muted);">ORC.</small><b style="font-family:var(--fm);font-size:.58rem;color:var(--warn);">${moeda(resumo.orcamento||0)}</b></div>
+        <div style="background:rgba(0,212,255,.05);border:1px solid rgba(0,212,255,.12);padding:5px;border-radius:3px;"><small style="display:block;font-family:var(--fm);font-size:.47rem;color:var(--muted);">APROV.</small><b style="font-family:var(--fm);font-size:.58rem;color:var(--cyan);">${resumo.aprovado?moeda(resumo.aprovado):'-'}</b></div>
+        <div style="background:rgba(0,255,136,.05);border:1px solid rgba(0,255,136,.12);padding:5px;border-radius:3px;"><small style="display:block;font-family:var(--fm);font-size:.47rem;color:var(--muted);">FAT.</small><b style="font-family:var(--fm);font-size:.58rem;color:var(--success);">${resumo.faturado?moeda(resumo.faturado):'-'}</b></div>
+      </div>`;
       return `
       <div class="k-card" style="border-left-color:${cor}" onclick="prepOS('edit','${os.id}');abrirModal('modalOS')">
         <div class="k-placa" style="color:${cor}">${v?.placa||os.placa||'S/PLACA'}</div>
         <div class="k-cli">${c?.nome||os.cliente||'—'}</div>
         <div class="k-desc">${os.desc||os.relato||'Sem descrição'}</div>
+        ${valores}
         <div class="k-footer">
           <span class="k-tipo ${v?.tipo||'carro'}">${{carro:'🚗 CARRO',moto:'🏍️ MOTO',bicicleta:'🚲 BICICLETA'}[v?.tipo||'carro']||'VEÍCULO'}</span>
         </div>
@@ -1568,6 +1576,7 @@ function prepOS(mode,id=null){
   $('osMO').value='0'; $('osTipo').value='carro'; $('osStatus').value='Aguardando';
   $('osData').value=new Date().toISOString().split('T')[0];
   $('containerPecas').innerHTML=''; $('containerServicos').innerHTML='';
+  document.getElementById('resumoAprovacaoEquipe')?.remove();
   $('mediaGrid').innerHTML=''; $('mediaArray').value='[]';
   $('osTimeline').innerHTML=''; $('tlData').value='[]';
   $('osIdBadge').innerText='NOVA O.S.';
@@ -1616,6 +1625,8 @@ function prepOS(mode,id=null){
 
 function aplicarMarcadoresAprovacaoEquipe(os) {
   const U = window.JOS || window.JarvisOSUtils || {};
+  document.getElementById('resumoAprovacaoEquipe')?.remove();
+  document.querySelectorAll('#containerServicos .aprovacao-item-badge,#containerPecas .aprovacao-item-badge').forEach(el => el.remove());
   if (!U.hasApproval?.(os)) return;
   const keys = U.getApprovedKeys?.(os) || new Set();
   const mk = key => `<div class="aprovacao-item-badge" style="font-family:var(--fm);font-size:.56rem;letter-spacing:.7px;color:${keys.has(key) ? 'var(--success)' : 'var(--danger)'};padding:2px 4px;border:1px solid ${keys.has(key) ? 'rgba(0,255,136,.25)' : 'rgba(255,59,59,.25)'};border-radius:2px;white-space:nowrap;">${keys.has(key) ? 'APROVADO' : 'NÃO APROVADO'}</div>`;
@@ -1627,6 +1638,23 @@ function aplicarMarcadoresAprovacaoEquipe(os) {
     row.querySelector('.aprovacao-item-badge')?.remove();
     row.insertAdjacentHTML('beforeend', mk('peca-' + idx));
   });
+  const cliente = (dbClientes || []).find(c => c.id === os?.clienteId);
+  const itens = U.buildBudgetItems?.(os, cliente) || [];
+  const aprovados = itens.filter(it => keys.has(it.key));
+  const pendentes = itens.filter(it => !keys.has(it.key));
+  const moeda = U.moeda || (v => 'R$ ' + parseBR(v).toFixed(2).replace('.', ','));
+  const total = os?.totalAprovado != null ? parseBR(os.totalAprovado) : aprovados.reduce((sum, it) => sum + parseBR(it.valorFinal), 0);
+  const box = document.createElement('div');
+  box.id = 'resumoAprovacaoEquipe';
+  box.style.cssText = 'background:rgba(0,255,136,.07);border:1px solid rgba(0,255,136,.24);border-radius:4px;padding:12px;margin-bottom:14px;';
+  box.innerHTML = `
+    <div style="font-family:var(--fd);font-weight:800;color:var(--success);letter-spacing:1px;margin-bottom:8px;">ORCAMENTO APROVADO - ${aprovados.length}/${itens.length} ITEM(NS) - ${moeda(total)}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;">
+      ${aprovados.map(it => `<div style="border:1px solid rgba(0,255,136,.2);background:rgba(0,0,0,.14);border-radius:3px;padding:8px;font-size:.75rem;"><b style="color:var(--success);">APROVADO</b><br>${U.escapeHtml?.(it.desc || '-') || it.desc || '-'}<br><small>${it.codigo ? '[' + (U.escapeHtml?.(it.codigo) || it.codigo) + '] ' : ''}${it.tempo ? 'TMO ' + String(it.tempo).replace('.', ',') + 'h' : ''}</small></div>`).join('')}
+      ${pendentes.map(it => `<div style="border:1px solid rgba(255,184,0,.24);background:rgba(0,0,0,.1);border-radius:3px;padding:8px;font-size:.75rem;opacity:.75;"><b style="color:var(--warn);">NAO APROVADO</b><br>${U.escapeHtml?.(it.desc || '-') || it.desc || '-'}<br><small>Mantido para historico.</small></div>`).join('')}
+    </div>`;
+  const alvo = document.getElementById('containerServicos')?.parentElement;
+  if (alvo) alvo.insertAdjacentElement('beforebegin', box);
 }
 
 // ADICIONAR SERVIÇOS (DINÂMICO POR CARGO)

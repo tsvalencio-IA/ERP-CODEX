@@ -351,7 +351,7 @@ body { overflow-y: auto; background: #060A14; color: #E8F4FF; font-family: 'Exo 
 // Powered by thIAguinho Soluções Digitais
 // ============================================================
 const db = window.initFirebase();
-let P = { clienteId: null, tenantId: null, cliente: null, oficina: null, veiculos: [] };
+let P = { clienteId: null, tenantId: null, cliente: null, oficina: null, veiculos: [], financeiro: [] };
 const formatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
 function toast(msg, type='ok') {
@@ -495,7 +495,9 @@ function _iniciarPortalListeners() {
             if (nomeCliente.length > 2 && desc.includes(nomeCliente.split(' ')[0])) return true;
             return false;
           }).sort((a,b)=>((b.venc||'')>(a.venc||''))?1:-1);
+          P.financeiro = finList;
           _renderFinanceiro(finList);
+          if (window._osDoCliente) _renderPortalOS(window._osDoCliente);
         });
       db.collection('agendamentos').where('tenantId', '==', P.tenantId).where('clienteId', '==', P.clienteId).onSnapshot(snap => {
           const agdList = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b)=>(b.data||'') > (a.data||'') ? 1 : -1); _renderAgendamento(agdList);
@@ -557,6 +559,30 @@ function _renderPortalOS(osList) {
     // Calculo: (índice atual / índice total) * 100
     // Como tem 7 passos, o índice máximo é 6. 6/6 * 100 = 100%.
     const fillPercent = isEntregue ? 100 : Math.max(0, (statusIdx / (STEPS.length - 1)) * 100);
+    const UOSPortal = window.JOS || window.JarvisOSUtils || {};
+    const resumoValores = UOSPortal.getBudgetSummary
+      ? UOSPortal.getBudgetSummary(os, P.cliente, P.financeiro)
+      : { orcamento: os.total || 0, aprovado: os.totalAprovado || 0, faturado: 0, pagamento: {} };
+    const vencimentos = (resumoValores.pagamento?.vencimentos || []).map(v => {
+      try { return new Date(String(v).slice(0,10) + 'T00:00:00').toLocaleDateString('pt-BR'); }
+      catch(e) { return v; }
+    });
+    const resumoValoresHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0;">
+        <div style="background:rgba(255,255,255,.035);border:1px solid var(--border);border-radius:var(--r-md);padding:10px;">
+          <div style="font-family:var(--ff-mono);font-size:.62rem;color:var(--text-muted);letter-spacing:1px;">ORCAMENTO</div>
+          <strong style="font-family:var(--ff-mono);color:var(--warn);font-size:.98rem;">${formatter.format(resumoValores.orcamento || 0)}</strong>
+        </div>
+        <div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.22);border-radius:var(--r-md);padding:10px;">
+          <div style="font-family:var(--ff-mono);font-size:.62rem;color:var(--text-muted);letter-spacing:1px;">APROVADO</div>
+          <strong style="font-family:var(--ff-mono);color:var(--brand);font-size:.98rem;">${resumoValores.aprovado ? formatter.format(resumoValores.aprovado) : '-'}</strong>
+        </div>
+        <div style="background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.22);border-radius:var(--r-md);padding:10px;">
+          <div style="font-family:var(--ff-mono);font-size:.62rem;color:var(--text-muted);letter-spacing:1px;">FATURADO</div>
+          <strong style="font-family:var(--ff-mono);color:var(--success);font-size:.98rem;">${resumoValores.faturado ? formatter.format(resumoValores.faturado) : '-'}</strong>
+        </div>
+      </div>
+      ${(resumoValores.pagamento?.forma || vencimentos.length) ? `<div style="font-family:var(--ff-mono);font-size:.72rem;color:var(--text-muted);line-height:1.5;margin-top:8px;">${resumoValores.pagamento?.forma ? `Pagamento: <strong style="color:var(--text-primary)">${resumoValores.pagamento.forma}</strong>` : ''}${vencimentos.length ? `<br>Vencimentos: <strong style="color:var(--text-primary)">${vencimentos.join(' | ')}</strong>` : ''}</div>` : ''}`;
     
     const stepperHTML = isCancelada 
         ? `<div style="text-align:center;padding:24px;color:var(--danger);font-weight:700;font-family:var(--ff-display);font-size:1.4rem;">🚫 CANCELADA</div>` 
@@ -565,7 +591,7 @@ function _renderPortalOS(osList) {
     // Banner Entregue Premium injetado logo após o stepper
     const bannerEntregueHtml = isEntregue ? `<div style="margin: 20px; padding: 16px; background: linear-gradient(135deg, var(--success-dim), transparent); border-left: 4px solid var(--success); border-radius: 0 var(--r-md) var(--r-md) 0;"><div style="font-family:var(--ff-display);font-size:1.2rem;font-weight:700;color:var(--success);margin-bottom:6px">✅ Veículo Entregue</div><div style="font-size:0.9rem;color:white;">Serviço finalizado. Agradecemos a confiança!</div></div>` : '';
     
-    const orcAlerta = isOrcamento ? `<div class="alerta-orcamento"><div style="font-family:var(--ff-display);font-size:1.2rem;font-weight:700;color:var(--warn);margin-bottom:6px">Orçamento Disponível</div><div style="font-size:0.9rem;color:white;margin-bottom:16px">Valor estimado: <strong style="font-size:1.3rem;">${formatter.format(os.total || 0)}</strong></div><div style="display:flex;gap:10px;flex-wrap:wrap;"><button class="btn btn-success" style="flex:1;" onclick="_aprovarOrcamento('${os.id}')">✓ APROVAR</button><button class="btn btn-outline" style="flex:1;" onclick="_negociarOrcamento('${placaFormatada}')">💬 NEGOCIAR</button></div></div>` : '';
+    const orcAlerta = isOrcamento ? `<div class="alerta-orcamento"><div style="font-family:var(--ff-display);font-size:1.2rem;font-weight:700;color:var(--warn);margin-bottom:6px">Orçamento Disponível</div>${resumoValoresHTML}<div style="display:flex;gap:10px;flex-wrap:wrap;"><button class="btn btn-success" style="flex:1;" onclick="_aprovarOrcamento('${os.id}')">✓ APROVAR</button><button class="btn btn-outline" style="flex:1;" onclick="_negociarOrcamento('${placaFormatada}')">💬 NEGOCIAR</button></div></div>` : '';
 
     const timelineHtml = `
       <div class="timeline-box">
@@ -625,6 +651,7 @@ function _renderPortalOS(osList) {
             <div><span class="ficha-lbl" style="font-size:0.7rem; color:var(--text-muted); display:block;">Ano / Cor</span><span class="ficha-val" style="font-weight:bold;">${v.ano || '—'} / ${v.cor || '—'}</span></div>
         </div>
         <div style="margin-bottom:20px;"><span class="ficha-lbl" style="font-size:0.7rem; color:var(--text-muted); display:block; margin-bottom:5px;">Diagnóstico Técnico</span><div style="font-size:0.85rem; background:rgba(0,0,0,0.2); padding:10px; border-radius:var(--r-md); border-left:3px solid var(--brand);">${os.diagnostico || 'Avaliação técnica em andamento...'}</div></div>
+        ${resumoValoresHTML}
         ${financeiroDetalhe}
         ${(os.media && os.media.length > 0) || (os.fotos && os.fotos.length > 0) ? `<div style="font-size:0.7rem; color:var(--text-muted); margin-bottom:5px; text-transform:uppercase;">Evidências (Fotos/Vídeos)</div><div class="media-grid">${(os.media || os.fotos || []).map(m => `<div class="media-item"><img src="${m.url || m}" onclick="window.open('${m.url || m}')"></div>`).join('')}</div>` : ''}
         ${timelineHtml}
@@ -640,7 +667,7 @@ function _renderPortalOS(osList) {
         <div style="padding:14px 20px; background:var(--surf-2); border-bottom:1px solid var(--border); font-size:0.85rem; color:var(--text-primary); display:flex; justify-content:space-between; align-items:center;">
           <div><strong style="color:white">${v.modelo || os.veiculo || 'Veículo'}</strong></div><div style="font-family:var(--ff-mono);font-size:0.6rem;color:var(--text-muted)">OS #${os.id.slice(-6).toUpperCase()}</div>
         </div>
-        ${stepperHTML}${bannerEntregueHtml}${orcAlerta}${revisaoHTML}${badgeHistorico}
+        ${stepperHTML}${bannerEntregueHtml}${orcAlerta}${!isOrcamento ? `<div style="padding:0 20px 16px">${resumoValoresHTML}</div>` : ''}${revisaoHTML}${badgeHistorico}
         <button class="btn-toggle-detalhes" onclick="this.closest('.os-card').classList.toggle('expanded')">▼ VER DETALHAMENTO E HISTÓRICO DA OS</button>
         ${detalheHtml}
       </div>`;
@@ -667,11 +694,6 @@ function _renderFinanceiro(finList) {
     return true;
   });
 
-  if (docsCli.length === 0) {
-    container.innerHTML = `<div style="padding:40px 20px;text-align:center;background:var(--surf-1);border-radius:var(--r-xl);border:1px dashed var(--border);"><div style="font-size:2.5rem;margin-bottom:12px">💳</div><div style="font-family:var(--ff-display);font-size:1.2rem;font-weight:700;color:white;">Nenhum histórico financeiro</div></div>`;
-    return;
-  }
-
   // Agrupa recebimentos de cartão (que o cliente já quitou) para mostrar como 1 linha "PAGO"
   const docsClienteViu = [];
   const osQuitadasNoCartao = new Set();
@@ -686,11 +708,11 @@ function _renderFinanceiro(finList) {
   // 2ª passagem: monta lista de verdade
   const osDoCli = (window._osDoCliente || []);
   osDoCli.forEach(os => {
-    if (osQuitadasNoCartao.has(os.id) && os.total > 0) {
+    if (osQuitadasNoCartao.has(os.id) && (os.totalAprovado || os.total) > 0) {
       // OS paga no cartão — mostra como 1 linha quitada
       docsClienteViu.push({
         desc: `O.S. ${os.placa || ''} — ${os.desc || 'Serviço'}`,
-        valor: os.total,
+        valor: os.totalAprovado || os.total,
         status: 'Pago',
         pgtoResumo: os.pgtoResumoCliente || os.pgtoForma || 'Cartão',
         dataPgto: os.pgtoData,
@@ -704,6 +726,11 @@ function _renderFinanceiro(finList) {
     docsClienteViu.push(f);
   });
 
+  if (docsClienteViu.length === 0) {
+    container.innerHTML = `<div style="padding:40px 20px;text-align:center;background:var(--surf-1);border-radius:var(--r-xl);border:1px dashed var(--border);"><div style="font-size:2.5rem;margin-bottom:12px">💳</div><div style="font-family:var(--ff-display);font-size:1.2rem;font-weight:700;color:white;">Nenhum histórico financeiro</div></div>`;
+    return;
+  }
+
   let emAberto = 0;
   let totalPago = 0;
   const listHTML = docsClienteViu.map(f => {
@@ -711,7 +738,8 @@ function _renderFinanceiro(finList) {
     if (!isPago) emAberto += (f.valor || 0);
     if (isPago)  totalPago += (f.valor || 0);
 
-    const pgtoInfo = f.pgtoResumo ? `<div style="font-family:var(--ff-mono); font-size:0.68rem; color:var(--brand); margin-top:4px;">💳 ${f.pgtoResumo}</div>` : '';
+    const pgtoTexto = f.pgtoResumoCliente || f.pgtoResumo || f.pgto || '';
+    const pgtoInfo = pgtoTexto ? `<div style="font-family:var(--ff-mono); font-size:0.68rem; color:var(--brand); margin-top:4px;">💳 ${pgtoTexto}</div>` : '';
     const dataInfo = isPago && f.dataPgto
       ? `Pago em: ${new Date(f.dataPgto).toLocaleDateString('pt-BR')}`
       : (f.venc ? `Vencimento: ${new Date(f.venc).toLocaleDateString('pt-BR')}` : '-');
